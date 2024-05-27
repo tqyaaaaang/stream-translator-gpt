@@ -32,7 +32,7 @@ def _send_to_telegram(token: str, chat_id: int, text: str):
 
 
 def _output_to_file(file_path: str, text: str):
-    with open(file_path, 'a') as f:
+    with open(file_path, 'a', encoding='utf-8') as f:
         f.write(text + '\n\n')
 
 
