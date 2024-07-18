@@ -150,10 +150,10 @@ python3 ./stream-translator-gpt/translator.py
 | `--cookies`                        |                | 用于打开仅会员可看的直播流，此参数将直接传递给yt-dlp。                                                                   |
 | `--device_index`                   |                | 音频输入设备的index。如果未设置，则使用系统默认音频输入设备。                                                            |
 | **音频切割选项**                   |
-| `--frame_duration`                 | 0.05           | 处理实时流数据的单位（以秒为单位），需大于等于0.03。                                                                     |
+| `--frame_duration`                 | 0.1            | 处理实时流数据的单位（以秒为单位），需大于等于0.03。                                                                     |
 | `--continuous_no_speech_threshold` | 0.5            | 如果连续一段时间内没有语音，则进行切片（以秒为单位）。                                                                   |
-| `--min_audio_length`               | 3.0            | 切片音频的最小长度（以秒为单位）。                                                                                       |
-| `--max_audio_length`               | 30.0           | 切片音频的最大长度（以秒为单位）。                                                                                       |
+| `--min_audio_length`               | 1.5            | 切片音频的最小长度（以秒为单位）。                                                                                       |
+| `--max_audio_length`               | 15.0           | 切片音频的最大长度（以秒为单位）。                                                                                       |
 | `--prefix_retention_length`        | 0.5            | 在切割过程中保留前缀音频的长度。                                                                                         |
 | `--vad_threshold`                  | 0.35           | 人声检测阈值。如果一个帧的语音概率高于此值，那么这个帧就是人声。                                                         |
 | **语音转文字选项**                 |
@@ -163,7 +163,7 @@ python3 ./stream-translator-gpt/translator.py
 | `--best_of`                        | 5              | 在非零温度下采样时的候选者数量。                                                                                         |
 | `--use_faster_whisper`             |                | 设置此标志以使用Faster-Whisper实现，而不是原始的OpenAI实现                                                               |
 | `--use_whisper_api`                |                | 设置此标志以使用OpenAI Whisper API，而不是原始本地Whipser.                                                               |
-| `--whisper_filters`                | emoji_filter   | 应用于whisper结果的过滤器，由","分隔。                                                                                   |
+| `--whisper_filters`                | emoji_filter   | 应用于whisper结果的过滤器，由","分隔。我们提供 emoji_filter 和 japanese_stream_filter                                    |
 | **翻译选项**                       |
 | `--openai_api_key`                 |                | 如果使用GPT翻译/Whisper API，需要OpenAI API密钥。                                                                        |
 | `--google_api_key`                 |                | 如果使用Gemini翻译，需要Google API密钥。                                                                                 |

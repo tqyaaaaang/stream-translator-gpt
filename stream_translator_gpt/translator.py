@@ -164,7 +164,7 @@ def cli():
     parser.add_argument(
         '--frame_duration',
         type=float,
-        default=0.05,
+        default=0.1,
         help='The unit that processes live streaming data in seconds, should be >= 0.03')
     parser.add_argument('--continuous_no_speech_threshold',
                         type=float,
@@ -172,11 +172,11 @@ def cli():
                         help='Slice if there is no speech for a continuous period in second.')
     parser.add_argument('--min_audio_length',
                         type=float,
-                        default=3.0,
+                        default=1.5,
                         help='Minimum slice audio length in seconds.')
     parser.add_argument('--max_audio_length',
                         type=float,
-                        default=30.0,
+                        default=15.0,
                         help='Maximum slice audio length in seconds.')
     parser.add_argument('--prefix_retention_length',
                         type=float,
@@ -225,7 +225,7 @@ def cli():
     parser.add_argument('--whisper_filters',
                         type=str,
                         default='emoji_filter',
-                        help='Filters apply to whisper results, separated by ",".')
+                        help='Filters apply to whisper results, separated by ",". We provide emoji_filter and japanese_stream_filter.')
     parser.add_argument('--openai_api_key',
                         type=str,
                         default=None,
