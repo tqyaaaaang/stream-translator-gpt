@@ -222,10 +222,13 @@ def cli():
                         action='store_true',
                         help='Set this flag to use OpenAI Whisper API instead of '
                         'the original local Whipser.')
-    parser.add_argument('--whisper_filters',
-                        type=str,
-                        default='emoji_filter',
-                        help='Filters apply to whisper results, separated by ",". We provide emoji_filter and japanese_stream_filter.')
+    parser.add_argument(
+        '--whisper_filters',
+        type=str,
+        default='emoji_filter',
+        help=
+        'Filters apply to whisper results, separated by ",". We provide emoji_filter and japanese_stream_filter.'
+    )
     parser.add_argument('--openai_api_key',
                         type=str,
                         default=None,
