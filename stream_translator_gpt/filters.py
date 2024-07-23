@@ -16,8 +16,13 @@ def japanese_stream_filter(text: str):
     ]:
         text = re.sub(filter_pattern, '', text)
 
-    for filter_text in ['エンディング', '字幕作成', 'この動画の字幕', '次回予告', 'またね', 'ありがとうございました']:
+    for filter_text in ['字幕作成', 'この動画の字幕']:
         if filter_text in text:
+            print('filter', text)
+            return ''
+
+    for filter_text in ['エンディング', '次回予告', 'またね', 'ありがとうございました']:
+        if filter_text == text:
             print('filter', text)
             return ''
 
