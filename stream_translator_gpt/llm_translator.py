@@ -23,6 +23,9 @@ def _parse_json_completion(completion):
             json_str = json_match.group(0)
             json_obj = json.loads(json_str)
             translate_text = json_obj.get('translation', None)
+            # The results of LLMs may contain multiple levels of nesting.
+            while isinstance(translate_text, dict) and 'translation' in translate_text:
+                translate_text = translate_text.get('translation', None)
             if not translate_text:
                 return completion
             return translate_text
