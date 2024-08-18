@@ -17,15 +17,15 @@ from .common import TranslationTask, LoopWorkerBase
 # The double quotes in the values of JSON have not been escaped, so manual escaping is necessary.
 def escape_specific_quotes(input_string):
     quote_positions = [i for i, char in enumerate(input_string) if char == '"']
-    
+
     if len(quote_positions) <= 4:
         return input_string
-    
+
     for i in range(3, len(quote_positions) - 1):
         position = quote_positions[i]
-        input_string = input_string[:position] + '\\"' + input_string[position+1:]
+        input_string = input_string[:position] + '\\"' + input_string[position + 1:]
         quote_positions = [pos + 1 if pos > position else pos for pos in quote_positions]
-    
+
     return input_string
 
 
