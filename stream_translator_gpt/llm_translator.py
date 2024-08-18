@@ -14,24 +14,39 @@ from openai import OpenAI, APITimeoutError, APIConnectionError
 from .common import TranslationTask, LoopWorkerBase
 
 
+# The double quotes in the values of JSON have not been escaped, so manual escaping is necessary.
+def escape_specific_quotes(input_string):
+    quote_positions = [i for i, char in enumerate(input_string) if char == '"']
+    
+    if len(quote_positions) <= 4:
+        return input_string
+    
+    for i in range(3, len(quote_positions) - 1):
+        position = quote_positions[i]
+        input_string = input_string[:position] + '\\"' + input_string[position+1:]
+        quote_positions = [pos + 1 if pos > position else pos for pos in quote_positions]
+    
+    return input_string
+
+
 def _parse_json_completion(completion):
     pattern = re.compile(r'\{.*}', re.DOTALL)
     json_match = pattern.search(completion)
 
-    if json_match:
-        try:
-            json_str = json_match.group(0)
-            json_obj = json.loads(json_str)
-            translate_text = json_obj.get('translation', None)
-            # The results of LLMs may contain multiple levels of nesting.
-            while isinstance(translate_text, dict) and 'translation' in translate_text:
-                translate_text = translate_text.get('translation', None)
-            if not translate_text:
-                return completion
-            return translate_text
-        except json.JSONDecodeError:
+    if not json_match:
+        return completion
+
+    json_str = json_match.group(0)
+    json_str = escape_specific_quotes(json_str)
+
+    try:
+        json_str = json_match.group(0)
+        json_obj = json.loads(json_str)
+        translate_text = json_obj.get('translation', None)
+        if not translate_text:
             return completion
-    else:
+        return translate_text
+    except json.JSONDecodeError:
         return completion
 
 
