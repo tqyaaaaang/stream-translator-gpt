@@ -40,7 +40,6 @@ def _parse_json_completion(completion):
     json_str = escape_specific_quotes(json_str)
 
     try:
-        json_str = json_match.group(0)
         json_obj = json.loads(json_str)
         translate_text = json_obj.get('translation', None)
         if not translate_text:
