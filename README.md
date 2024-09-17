@@ -145,7 +145,7 @@ python3 ./stream-translator-gpt/translator.py
 ## All options
 
 | Option                             | Default Value  | Description                                                                                                                                                                                              |
-| :--------------------------------- | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|:-----------------------------------| :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Input Options**                  |
 | `URL`                              |                | The URL of the stream. If a local file path is filled in, it will be used as input. If fill in "device", the input will be obtained from your PC device.                                                 |
 | `--format`                         | wa*            | Stream format code, this parameter will be passed directly to yt-dlp.                                                                                                                                    |
@@ -175,6 +175,7 @@ python3 ./stream-translator-gpt/translator.py
 | `--gpt_translation_history_size`   | 0              | The number of previous messages sent when calling the GPT / Gemini API. If the history size is 0, the translation will be run parallelly. If the history size > 0, the translation will be run serially. |
 | `--gpt_translation_timeout`        | 10             | If the GPT / Gemini translation exceeds this number of seconds, the translation will be discarded.                                                                                                       |
 | `--gpt_base_url`                   |                | Customize the API endpoint of GPT.                                                                                                                                                                       |
+| `--gemini_base_url`                |                | Customize the API endpoint of Gemini.                                                                                                                                                                       |
 | `--retry_if_translation_fails`     |                | Retry when translation times out/fails. Used to generate subtitles offline.                                                                                                                              |
 | **Output Options**                 |
 | `--output_timestamps`              |                | Output the timestamp of the text when outputting the text.                                                                                                                                               |
