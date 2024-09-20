@@ -21,12 +21,12 @@ def _start_daemon_thread(func, *args, **kwargs):
     thread.start()
 
 
-def main(url, format, cookies, device_index, frame_duration, continuous_no_speech_threshold,
+def main(url, format, cookies, input_proxy, device_index, frame_duration, continuous_no_speech_threshold,
          min_audio_length, max_audio_length, prefix_retention_length, vad_threshold, model,
          language, use_faster_whisper, use_whisper_api, whisper_filters, openai_api_key,
          google_api_key, gpt_translation_prompt, gpt_translation_history_size, gpt_model,
-         gemini_model, gpt_translation_timeout, gpt_base_url, gemini_base_url,
-         retry_if_translation_fails, output_timestamps, hide_transcribe_result, output_file_path,
+         gemini_model, gpt_translation_timeout, gpt_base_url, gemini_base_url, processing_proxy,
+         retry_if_translation_fails, output_timestamps, hide_transcribe_result, output_proxy, output_file_path,
          cqhttp_url, cqhttp_token, discord_webhook_url, telegram_token, telegram_chat_id,
          **transcribe_options):
     if openai_api_key:
@@ -46,38 +46,41 @@ def main(url, format, cookies, device_index, frame_duration, continuous_no_speec
     _start_daemon_thread(ResultExporter.work,
                          output_whisper_result=not hide_transcribe_result,
                          output_timestamps=output_timestamps,
+                         proxy=output_proxy,
                          output_file_path=output_file_path,
                          cqhttp_url=cqhttp_url,
                          cqhttp_token=cqhttp_token,
                          discord_webhook_url=discord_webhook_url,
                          telegram_token=telegram_token,
                          telegram_chat_id=telegram_chat_id,
-                         input_queue=translator_to_exporter_queue)
+                         input_queue=translator_to_exporter_queue,)
     if gpt_translation_prompt:
         if google_api_key:
             llm_client = LLMClint(llm_type=LLMClint.LLM_TYPE.GEMINI,
                                   model=gemini_model,
                                   prompt=gpt_translation_prompt,
-                                  history_size=gpt_translation_history_size)
+                                  history_size=gpt_translation_history_size,
+                                  proxy=processing_proxy,)
         else:
             llm_client = LLMClint(llm_type=LLMClint.LLM_TYPE.GPT,
                                   model=gpt_model,
                                   prompt=gpt_translation_prompt,
-                                  history_size=gpt_translation_history_size)
+                                  history_size=gpt_translation_history_size,
+                                  proxy=processing_proxy,)
         if gpt_translation_history_size == 0:
             _start_daemon_thread(ParallelTranslator.work,
                                  llm_client=llm_client,
                                  timeout=gpt_translation_timeout,
                                  retry_if_translation_fails=retry_if_translation_fails,
                                  input_queue=transcriber_to_translator_queue,
-                                 output_queue=translator_to_exporter_queue)
+                                 output_queue=translator_to_exporter_queue,)
         else:
             _start_daemon_thread(SerialTranslator.work,
                                  llm_client=llm_client,
                                  timeout=gpt_translation_timeout,
                                  retry_if_translation_fails=retry_if_translation_fails,
                                  input_queue=transcriber_to_translator_queue,
-                                 output_queue=translator_to_exporter_queue)
+                                 output_queue=translator_to_exporter_queue,)
     if use_faster_whisper:
         _start_daemon_thread(FasterWhisper.work,
                              model=model,
@@ -91,6 +94,7 @@ def main(url, format, cookies, device_index, frame_duration, continuous_no_speec
     elif use_whisper_api:
         _start_daemon_thread(RemoteOpenaiWhisper.work,
                              language=language,
+                             proxy=processing_proxy,
                              print_result=not hide_transcribe_result,
                              output_timestamps=output_timestamps,
                              input_queue=slicer_to_transcriber_queue,
@@ -115,21 +119,22 @@ def main(url, format, cookies, device_index, frame_duration, continuous_no_speec
                          prefix_retention_length=prefix_retention_length,
                          vad_threshold=vad_threshold,
                          input_queue=getter_to_slicer_queue,
-                         output_queue=slicer_to_transcriber_queue)
+                         output_queue=slicer_to_transcriber_queue,)
     if url.lower() == 'device':
         DeviceAudioGetter.work(device_index=device_index,
                                frame_duration=frame_duration,
-                               output_queue=getter_to_slicer_queue)
+                               output_queue=getter_to_slicer_queue,)
     elif os.path.isabs(url):
         LocalFileAudioGetter.work(file_path=url,
                                   frame_duration=frame_duration,
-                                  output_queue=getter_to_slicer_queue)
+                                  output_queue=getter_to_slicer_queue,)
     else:
         StreamAudioGetter.work(url=url,
                                format=format,
                                cookies=cookies,
+                               proxy=input_proxy,
                                frame_duration=frame_duration,
-                               output_queue=getter_to_slicer_queue)
+                               output_queue=getter_to_slicer_queue,)
 
     # Wait for others process finish.
     while (not getter_to_slicer_queue.empty() or not slicer_to_transcriber_queue.empty() or
@@ -155,6 +160,10 @@ def cli():
                         default=None,
                         help='Used to open member-only stream, '
                         'this parameter will be passed directly to yt-dlp.')
+    parser.add_argument('--input_proxy',
+                        type=str,
+                        default=None,
+                        help='Use the specified HTTP/HTTPS/SOCKS proxy for yt-dlp, e.g. http://127.0.0.1:7890.')
     parser.add_argument('--device_index',
                         type=int,
                         default=None,
@@ -276,6 +285,10 @@ def cli():
                         type=str,
                         default=None,
                         help='Customize the API endpoint of Gemini.')
+    parser.add_argument('--processing_proxy',
+                        type=str,
+                        default=None,
+                        help='Use the specified HTTP/HTTPS/SOCKS proxy for Whisper/GPT API (Gemini currently doesn't support specifying a proxy within the program), e.g. http://127.0.0.1:7890.')
     parser.add_argument(
         '--retry_if_translation_fails',
         action='store_true',
@@ -286,6 +299,10 @@ def cli():
     parser.add_argument('--hide_transcribe_result',
                         action='store_true',
                         help='Hide the result of Whisper transcribe.')
+    parser.add_argument('--output_proxy',
+                        type=str,
+                        default=None,
+                        help='Use the specified HTTP/HTTPS/SOCKS proxy for Cqhttp/Discord/Telegram, e.g. http://127.0.0.1:7890.')
     parser.add_argument('--output_file_path',
                         type=str,
                         default=None,

@@ -3,7 +3,7 @@ import queue
 from scipy.io.wavfile import write as write_audio
 
 import numpy as np
-from openai import OpenAI
+from openai import OpenAI, DefaultHttpxClient
 
 from . import filters
 from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str
@@ -76,8 +76,13 @@ class FasterWhisper(OpenaiWhisper):
 class RemoteOpenaiWhisper(OpenaiWhisper):
     # https://platform.openai.com/docs/api-reference/audio/createTranscription?lang=python
 
-    def __init__(self, language: str) -> None:
+    def __init__(self, language: str, proxy: str) -> None:
         self.client = OpenAI()
+        self.client = OpenAI(
+            http_client=DefaultHttpxClient(
+                proxies=proxy,
+            ),
+        )
         self.language = language
 
     def __del__(self):
