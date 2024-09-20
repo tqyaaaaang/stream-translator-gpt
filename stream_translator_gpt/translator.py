@@ -35,7 +35,9 @@ def main(url, format, cookies, input_proxy, device_index, frame_duration, contin
         os.environ['OPENAI_BASE_URL'] = gpt_base_url
     if google_api_key:
         gemini_client_options = ClientOptions(api_endpoint=gemini_base_url)
-        genai.configure(api_key=google_api_key, client_options=gemini_client_options)
+        genai.configure(api_key=google_api_key,
+                        client_options=gemini_client_options,
+                        transport='rest')
 
     getter_to_slicer_queue = queue.SimpleQueue()
     slicer_to_transcriber_queue = queue.SimpleQueue()
