@@ -165,7 +165,8 @@ def cli():
     parser.add_argument('--input_proxy',
                         type=str,
                         default=None,
-                        help='Use the specified HTTP/HTTPS/SOCKS proxy for yt-dlp, e.g. http://127.0.0.1:7890.')
+                        help='Use the specified HTTP/HTTPS/SOCKS proxy for yt-dlp, '
+                        'e.g. http://127.0.0.1:7890.')
     parser.add_argument('--device_index',
                         type=int,
                         default=None,
@@ -178,7 +179,8 @@ def cli():
         '--frame_duration',
         type=float,
         default=0.1,
-        help='The unit that processes live streaming data in seconds, should be >= 0.03')
+        help='The unit that processes live streaming data in seconds, '
+        'should be >= 0.03')
     parser.add_argument('--continuous_no_speech_threshold',
                         type=float,
                         default=0.5,
@@ -240,7 +242,8 @@ def cli():
         type=str,
         default='emoji_filter',
         help=
-        'Filters apply to whisper results, separated by ",". We provide emoji_filter and japanese_stream_filter.'
+        'Filters apply to whisper results, separated by ",". '
+        'We provide emoji_filter and japanese_stream_filter.'
     )
     parser.add_argument('--openai_api_key',
                         type=str,
@@ -259,7 +262,8 @@ def cli():
         type=str,
         default='gemini-1.0-pro',
         help=
-        'Google\'s Gemini model name, gemini-1.0-pro / gemini-1.5-flash-latest / gemini-1.5-pro-latest'
+        'Google\'s Gemini model name, '
+        'gemini-1.0-pro / gemini-1.5-flash-latest / gemini-1.5-pro-latest'
     )
     parser.add_argument(
         '--gpt_translation_prompt',
@@ -290,7 +294,9 @@ def cli():
     parser.add_argument('--processing_proxy',
                         type=str,
                         default=None,
-                        help='Use the specified HTTP/HTTPS/SOCKS proxy for Whisper/GPT API (Gemini currently doesn't support specifying a proxy within the program), e.g. http://127.0.0.1:7890.')
+                        help='Use the specified HTTP/HTTPS/SOCKS proxy for Whisper/GPT API '
+                        '(Gemini currently doesn\'t support specifying a proxy within the program), '
+                        'e.g. http://127.0.0.1:7890.')
     parser.add_argument(
         '--retry_if_translation_fails',
         action='store_true',
@@ -304,7 +310,8 @@ def cli():
     parser.add_argument('--output_proxy',
                         type=str,
                         default=None,
-                        help='Use the specified HTTP/HTTPS/SOCKS proxy for Cqhttp/Discord/Telegram, e.g. http://127.0.0.1:7890.')
+                        help='Use the specified HTTP/HTTPS/SOCKS proxy for Cqhttp/Discord/Telegram, '
+                        'e.g. http://127.0.0.1:7890.')
     parser.add_argument('--output_file_path',
                         type=str,
                         default=None,
@@ -328,7 +335,8 @@ def cli():
         type=int,
         default=None,
         help=
-        'If set, will send the result text to this Telegram chat. Needs to be used with \"--telegram_token\".'
+        'If set, will send the result text to this Telegram chat. '
+        'Needs to be used with \"--telegram_token\".'
     )
 
     args = parser.parse_args().__dict__

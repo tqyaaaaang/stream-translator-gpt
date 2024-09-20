@@ -83,8 +83,8 @@ class LLMClint():
         # https://platform.openai.com/docs/api-reference/chat/create?lang=python
         client = OpenAI(
             http_client=DefaultHttpxClient(
-                proxies=self.proxy,
-            ),
+                proxies=self.proxy
+            )
         )
         system_prompt = 'You are a translation engine. Output the answer in json format, key is translation.'
         messages = [{'role': 'system', 'content': system_prompt}]

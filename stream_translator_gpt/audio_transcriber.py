@@ -80,8 +80,8 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
         self.client = OpenAI()
         self.client = OpenAI(
             http_client=DefaultHttpxClient(
-                proxies=proxy,
-            ),
+                proxies=proxy
+            )
         )
         self.language = language
 
