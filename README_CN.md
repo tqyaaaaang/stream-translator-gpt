@@ -148,6 +148,7 @@ python3 ./stream-translator-gpt/translator.py
 | `URL`                              |                           | 直播流的URL。如果填写了本地文件路径，它将被用作输入。如果填写"device"，输入将从您的PC音频设备获取。                      |
 | `--format`                         | wa*                       | 直播流格式代码，此参数将直接传递给yt-dlp。                                                                               |
 | `--cookies`                        |                           | 用于打开仅会员可看的直播流，此参数将直接传递给yt-dlp。                                                                   |
+| `--input_proxy`                    |                           | 为 yt-dlp 使用指定的 HTTP/HTTPS/SOCKS 代理，例如 http://127.0.0.1:7890。                                                 |
 | `--device_index`                   |                           | 音频输入设备的index。如果未设置，则使用系统默认音频输入设备。                                                            |
 | **音频切割选项**                   |
 | `--frame_duration`                 | 0.1                       | 处理实时流数据的单位（以秒为单位），需大于等于0.03。                                                                     |
@@ -174,10 +175,12 @@ python3 ./stream-translator-gpt/translator.py
 | `--gpt_translation_timeout`        | 10                        | 如果GPT / Gemini的翻译超过这个秒数，那么该次的翻译将被丢弃。                                                             |
 | `--gpt_base_url`                   | https://api.openai.com/v1 | 自定义GPT的API地址。                                                                                                     |
 | `--gemini_base_url`                |                           | 自定义Gemini的API地址。                                                                                                  |
+| `--processing_proxy`               |                           | 使用指定的HTTP/HTTPS/SOCKS代理来连接Whisper/GPT API（目前Gemini尚不支持在程序内指定代理），例如http://127.0.0.1:7890。   |
 | `--retry_if_translation_fails`     |                           | 当翻译超时/失败时重试。用于离线生成字幕。                                                                                |
 | **输出选项**                       |
 | `--output_timestamps`              |                           | 输出文本时同时输出时间戳。                                                                                               |
 | `--hide_transcribe_result`         |                           | 隐藏语音转文字的结果。                                                                                                   |
+| `--output_proxy`                   |                           | 为Cqhttp/Discord/Telegram使用指定的HTTP/HTTPS/SOCKS代理，例如http://127.0.0.1:7890。                                     |
 | `--output_file_path`               |                           | 如果设置，将会把结果文本保存到这个路径。                                                                                 |
 | `--cqhttp_url`                     |                           | 如果设置，将会把结果文本发送到cqhttp服务器。                                                                             |
 | `--cqhttp_token`                   |                           | cqhttp的令牌，如果在服务器端没有设置，不需要填写。                                                                       |
