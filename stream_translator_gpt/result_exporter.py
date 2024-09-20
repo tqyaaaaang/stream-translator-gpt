@@ -44,9 +44,10 @@ class ResultExporter(LoopWorkerBase):
                 os.remove(output_file_path)
 
     def loop(self, input_queue: queue.SimpleQueue[TranslationTask], output_whisper_result: bool,
-             output_timestamps: bool, proxy: str, output_file_path: str, cqhttp_url: str, cqhttp_token: str,
-             discord_webhook_url: str, telegram_token: str, telegram_chat_id: int):
-        proxies = { "http": proxy, "https": proxy } if proxy else None
+             output_timestamps: bool, proxy: str, output_file_path: str, cqhttp_url: str,
+             cqhttp_token: str, discord_webhook_url: str, telegram_token: str,
+             telegram_chat_id: int):
+        proxies = {"http": proxy, "https": proxy} if proxy else None
         while True:
             task = input_queue.get()
             timestamp_text = '{} --> {}'.format(sec2str(task.time_range[0]),

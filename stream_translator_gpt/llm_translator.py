@@ -55,7 +55,8 @@ class LLMClint():
         GPT = 'GPT'
         GEMINI = 'Gemini'
 
-    def __init__(self, llm_type: str, model: str, prompt: str, history_size: int, proxy: str) -> None:
+    def __init__(self, llm_type: str, model: str, prompt: str, history_size: int,
+                 proxy: str) -> None:
         if llm_type not in (self.LLM_TYPE.GPT, self.LLM_TYPE.GEMINI):
             raise ValueError('Unknow LLM type: {}'.format(llm_type))
         print('Using {} API as translation engine.'.format(model))
@@ -81,11 +82,7 @@ class LLMClint():
 
     def _translate_by_gpt(self, translation_task: TranslationTask):
         # https://platform.openai.com/docs/api-reference/chat/create?lang=python
-        client = OpenAI(
-            http_client=DefaultHttpxClient(
-                proxies=self.proxy
-            )
-        )
+        client = OpenAI(http_client=DefaultHttpxClient(proxies=self.proxy))
         system_prompt = 'You are a translation engine. Output the answer in json format, key is translation.'
         messages = [{'role': 'system', 'content': system_prompt}]
         messages.extend(self.history_messages)

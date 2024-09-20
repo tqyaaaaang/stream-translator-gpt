@@ -48,7 +48,8 @@ def _open_stream(url: str, format: str, cookies: str, proxy: str):
 
 class StreamAudioGetter(LoopWorkerBase):
 
-    def __init__(self, url: str, format: str, cookies: str, proxy: str, frame_duration: float) -> None:
+    def __init__(self, url: str, format: str, cookies: str, proxy: str,
+                 frame_duration: float) -> None:
         self._cleanup_ytdlp_cache()
 
         print('Opening stream: {}'.format(url))
