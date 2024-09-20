@@ -35,7 +35,7 @@ def main(url, format, cookies, device_index, frame_duration, continuous_no_speec
         os.environ['OPENAI_BASE_URL'] = gpt_base_url
     if google_api_key:
         gemini_client_options = ClientOptions(api_endpoint=gemini_base_url)
-        genai.configure(api_key=google_api_key, client_options=gemini_client_options)
+        genai.configure(api_key=google_api_key, client_options=gemini_client_options, transport='rest')
 
     getter_to_slicer_queue = queue.SimpleQueue()
     slicer_to_transcriber_queue = queue.SimpleQueue()
@@ -143,23 +143,23 @@ def cli():
     parser.add_argument('URL',
                         type=str,
                         help='The URL of the stream. '
-                        'If a local file path is filled in, it will be used as input. '
-                        'If fill in "device", the input will be obtained from your PC device.')
+                             'If a local file path is filled in, it will be used as input. '
+                             'If fill in "device", the input will be obtained from your PC device.')
     parser.add_argument('--format',
                         type=str,
                         default='wa*',
                         help='Stream format code, '
-                        'this parameter will be passed directly to yt-dlp.')
+                             'this parameter will be passed directly to yt-dlp.')
     parser.add_argument('--cookies',
                         type=str,
                         default=None,
                         help='Used to open member-only stream, '
-                        'this parameter will be passed directly to yt-dlp.')
+                             'this parameter will be passed directly to yt-dlp.')
     parser.add_argument('--device_index',
                         type=int,
                         default=None,
                         help='The index of the device that needs to be recorded. '
-                        'If not set, the system default recording device will be used.')
+                             'If not set, the system default recording device will be used.')
     parser.add_argument('--print_all_devices',
                         action='store_true',
                         help='Print all audio devices info then exit.')
@@ -188,8 +188,8 @@ def cli():
                         type=float,
                         default=0.35,
                         help='The threshold of Voice activity detection.'
-                        'if the speech probability of a frame is higher than this value, '
-                        'then this frame is speech.')
+                             'if the speech probability of a frame is higher than this value, '
+                             'then this frame is speech.')
     parser.add_argument('--model',
                         type=str,
                         choices=[
@@ -198,20 +198,20 @@ def cli():
                         ],
                         default='small',
                         help='Model to be used for generating audio transcription. '
-                        'Smaller models are faster and use less VRAM, '
-                        'but are also less accurate. .en models are more accurate '
-                        'but only work on English audio.')
+                             'Smaller models are faster and use less VRAM, '
+                             'but are also less accurate. .en models are more accurate '
+                             'but only work on English audio.')
     parser.add_argument('--language',
                         type=str,
                         default='auto',
                         help='Language spoken in the stream. '
-                        'Default option is to auto detect the spoken language. '
-                        'See https://github.com/openai/whisper for available languages.')
+                             'Default option is to auto detect the spoken language. '
+                             'See https://github.com/openai/whisper for available languages.')
     parser.add_argument('--beam_size',
                         type=int,
                         default=5,
                         help='Number of beams in beam search. '
-                        'Set to 0 to use greedy algorithm instead.')
+                             'Set to 0 to use greedy algorithm instead.')
     parser.add_argument('--best_of',
                         type=int,
                         default=5,
@@ -219,11 +219,11 @@ def cli():
     parser.add_argument('--use_faster_whisper',
                         action='store_true',
                         help='Set this flag to use faster-whisper implementation instead of '
-                        'the original OpenAI implementation.')
+                             'the original OpenAI implementation.')
     parser.add_argument('--use_whisper_api',
                         action='store_true',
                         help='Set this flag to use OpenAI Whisper API instead of '
-                        'the original local Whipser.')
+                             'the original local Whipser.')
     parser.add_argument(
         '--whisper_filters',
         type=str,
@@ -255,19 +255,19 @@ def cli():
         type=str,
         default=None,
         help='If set, will translate result text to target language via GPT / Gemini API. '
-        'Example: \"Translate from Japanese to Chinese\"')
+             'Example: \"Translate from Japanese to Chinese\"')
     parser.add_argument(
         '--gpt_translation_history_size',
         type=int,
         default=0,
         help='The number of previous messages sent when calling the GPT / Gemini API. '
-        'If the history size is 0, the translation will be run parallelly. '
-        'If the history size > 0, the translation will be run serially.')
+             'If the history size is 0, the translation will be run parallelly. '
+             'If the history size > 0, the translation will be run serially.')
     parser.add_argument('--gpt_translation_timeout',
                         type=int,
                         default=10,
                         help='If the GPT / Gemini translation exceeds this number of seconds, '
-                        'the translation will be discarded.')
+                             'the translation will be discarded.')
     parser.add_argument('--gpt_base_url',
                         type=str,
                         default=None,
@@ -298,7 +298,7 @@ def cli():
                         type=str,
                         default=None,
                         help='Token of cqhttp, if it is not set on the server side, '
-                        'it does not need to fill in.')
+                             'it does not need to fill in.')
     parser.add_argument('--discord_webhook_url',
                         type=str,
                         default=None,
