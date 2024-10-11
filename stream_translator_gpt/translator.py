@@ -220,17 +220,21 @@ def cli():
                         help='The threshold of Voice activity detection.'
                         'if the speech probability of a frame is higher than this value, '
                         'then this frame is speech.')
-    parser.add_argument('--model',
-                        type=str,
-                        default='small',
-                        help='Select Whisper/Faster-Whisper model size. '
-                        'See https://github.com/openai/whisper#available-models-and-languages for available models.')
-    parser.add_argument('--language',
-                        type=str,
-                        default='auto',
-                        help='Language spoken in the stream. '
-                        'Default option is to auto detect the spoken language. '
-                        'See https://github.com/openai/whisper#available-models-and-languages for available languages.')
+    parser.add_argument(
+        '--model',
+        type=str,
+        default='small',
+        help='Select Whisper/Faster-Whisper model size. '
+        'See https://github.com/openai/whisper#available-models-and-languages for available models.'
+    )
+    parser.add_argument(
+        '--language',
+        type=str,
+        default='auto',
+        help='Language spoken in the stream. '
+        'Default option is to auto detect the spoken language. '
+        'See https://github.com/openai/whisper#available-models-and-languages for available languages.'
+    )
     parser.add_argument('--beam_size',
                         type=int,
                         default=5,
