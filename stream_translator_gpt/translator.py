@@ -222,21 +222,15 @@ def cli():
                         'then this frame is speech.')
     parser.add_argument('--model',
                         type=str,
-                        choices=[
-                            'tiny', 'tiny.en', 'small', 'small.en', 'medium', 'medium.en', 'large',
-                            'large-v1', 'large-v2', 'large-v3'
-                        ],
                         default='small',
-                        help='Model to be used for generating audio transcription. '
-                        'Smaller models are faster and use less VRAM, '
-                        'but are also less accurate. .en models are more accurate '
-                        'but only work on English audio.')
+                        help='Select Whisper/Faster-Whisper model size. '
+                        'See https://github.com/openai/whisper#available-models-and-languages for available models.')
     parser.add_argument('--language',
                         type=str,
                         default='auto',
                         help='Language spoken in the stream. '
                         'Default option is to auto detect the spoken language. '
-                        'See https://github.com/openai/whisper for available languages.')
+                        'See https://github.com/openai/whisper#available-models-and-languages for available languages.')
     parser.add_argument('--beam_size',
                         type=int,
                         default=5,

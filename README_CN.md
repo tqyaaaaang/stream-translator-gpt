@@ -94,7 +94,7 @@ python3 ./stream-translator-gpt/translator.py
 
     ```stream-translator-gpt {URL} --model large --language {input_language}```
 
-- 通过 **Faster Whisper** 进行语音转文字：
+- 通过 **Faster-Whisper** 进行语音转文字：
 
     ```stream-translator-gpt {URL} --model large --language {input_language} --use_faster_whisper```
 
@@ -158,7 +158,7 @@ python3 ./stream-translator-gpt/translator.py
 | `--prefix_retention_length`        | 0.5                       | 在切割过程中保留前缀音频的长度。                                                                                         |
 | `--vad_threshold`                  | 0.35                      | 人声检测阈值。如果一个帧的语音概率高于此值，那么这个帧就是人声。                                                         |
 | **语音转文字选项**                 |
-| `--model`                          | small                     | Whisper模型大小。请在[此处](https://github.com/openai/whisper#available-models-and-languages)查看可用模型。              |
+| `--model`                          | small                     | 选择Whisper/Faster-Whisper模型。请在[此处](https://github.com/openai/whisper#available-models-and-languages)查看可用模型。              |
 | `--language`                       | auto                      | 直播流中的语言。请在[此处](https://github.com/openai/whisper#available-models-and-languages)查看可用语言。               |
 | `--beam_size`                      | 5                         | 波束搜索中的波束数量。设置为0以使用贪婪算法（更快但准确度较低）。                                                        |
 | `--best_of`                        | 5                         | 在非零温度下采样时的候选者数量。                                                                                         |

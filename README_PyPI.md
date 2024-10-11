@@ -49,7 +49,7 @@ python3 ./stream-translator-gpt/translator.py
 
     ```stream-translator-gpt {URL} --model large --language {input_language}```
 
-- Transcribe by **Faster Whisper**:
+- Transcribe by **Faster-Whisper**:
 
     ```stream-translator-gpt {URL} --model large --language {input_language} --use_faster_whisper```
 
