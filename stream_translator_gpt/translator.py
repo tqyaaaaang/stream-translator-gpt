@@ -263,13 +263,13 @@ def cli():
                         help='Google API key if using Gemini translation.')
     parser.add_argument('--gpt_model',
                         type=str,
-                        default='gpt-3.5-turbo',
-                        help='OpenAI\'s GPT model name, gpt-3.5-turbo / gpt-4 / gpt-4o.')
+                        default='gpt-4o-mini',
+                        help='OpenAI\'s GPT model name, gpt-3.5-turbo / gpt-4o / gpt-4o-mini.')
     parser.add_argument('--gemini_model',
                         type=str,
                         default='gemini-1.0-pro',
                         help='Google\'s Gemini model name, '
-                        'gemini-1.0-pro / gemini-1.5-flash-latest / gemini-1.5-pro-latest')
+                        'gemini-1.0-pro / gemini-1.5-flash / gemini-1.5-pro')
     parser.add_argument(
         '--gpt_translation_prompt',
         type=str,
