@@ -26,7 +26,7 @@ def main(url, format, cookies, input_proxy, device_index, frame_duration,
          prefix_retention_length, vad_threshold, model, language, use_faster_whisper,
          use_whisper_api, whisper_filters, openai_api_key, google_api_key, gpt_translation_prompt,
          gpt_translation_history_size, gpt_model, gemini_model, gpt_translation_timeout,
-         gpt_base_url, gemini_base_url, processing_proxy, retry_if_translation_fails,
+         gpt_base_url, gemini_base_url, processing_proxy, use_json_result, retry_if_translation_fails,
          output_timestamps, hide_transcribe_result, output_proxy, output_file_path, cqhttp_url,
          cqhttp_token, discord_webhook_url, telegram_token, telegram_chat_id, **transcribe_options):
     if openai_api_key:
@@ -66,6 +66,7 @@ def main(url, format, cookies, input_proxy, device_index, frame_duration,
                 prompt=gpt_translation_prompt,
                 history_size=gpt_translation_history_size,
                 proxy=processing_proxy,
+                use_json_result=use_json_result,
             )
         else:
             llm_client = LLMClint(
@@ -74,6 +75,7 @@ def main(url, format, cookies, input_proxy, device_index, frame_duration,
                 prompt=gpt_translation_prompt,
                 history_size=gpt_translation_history_size,
                 proxy=processing_proxy,
+                use_json_result=use_json_result,
             )
         if gpt_translation_history_size == 0:
             _start_daemon_thread(
@@ -307,6 +309,10 @@ def cli():
         help='Use the specified HTTP/HTTPS/SOCKS proxy for Whisper/GPT API '
         '(Gemini currently doesn\'t support specifying a proxy within the program), '
         'e.g. http://127.0.0.1:7890.')
+    parser.add_argument(
+        '--use_json_result',
+        action='store_true',
+        help='Using JSON result in LLM translation for some locally deployed models.')
     parser.add_argument(
         '--retry_if_translation_fails',
         action='store_true',

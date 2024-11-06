@@ -56,7 +56,7 @@ class LLMClint():
         GEMINI = 'Gemini'
 
     def __init__(self, llm_type: str, model: str, prompt: str, history_size: int,
-                 proxy: str) -> None:
+                 proxy: str, use_json_result: bool) -> None:
         if llm_type not in (self.LLM_TYPE.GPT, self.LLM_TYPE.GEMINI):
             raise ValueError('Unknow LLM type: {}'.format(llm_type))
         print('Using {} API as translation engine.'.format(model))
@@ -66,6 +66,7 @@ class LLMClint():
         self.history_size = history_size
         self.history_messages = []
         self.proxy = proxy
+        self.use_json_result = use_json_result
 
     def _append_history_message(self, user_content: str, assistant_content: str):
         if not user_content or not assistant_content:
@@ -83,7 +84,9 @@ class LLMClint():
     def _translate_by_gpt(self, translation_task: TranslationTask):
         # https://platform.openai.com/docs/api-reference/chat/create?lang=python
         client = OpenAI(http_client=DefaultHttpxClient(proxies=self.proxy))
-        system_prompt = 'You are a translation engine. Output the answer in json format, key is translation.'
+        system_prompt = 'You are a translation engine.'
+        if self.use_json_result:
+            system_prompt += " Output the answer in json format, key is translation."
         messages = [{'role': 'system', 'content': system_prompt}]
         messages.extend(self.history_messages)
         user_content = '{}: \n{}'.format(self.prompt, translation_task.transcribed_text)
@@ -99,8 +102,9 @@ class LLMClint():
                 messages=messages,
             )
 
-            translation_task.translated_text = _parse_json_completion(
-                completion.choices[0].message.content)
+            translation_task.translated_text = completion.choices[0].message.content
+            if self.use_json_result:
+                translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (APITimeoutError, APIConnectionError) as e:
             print(e)
             return
@@ -136,7 +140,9 @@ class LLMClint():
             response = client.generate_content(messages,
                                                generation_config=config,
                                                safety_settings=safety_settings)
-            translation_task.translated_text = _parse_json_completion(response.text)
+            translation_task.translated_text = response.text
+            if self.use_json_result:
+                translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (ValueError, InternalServerError, ResourceExhausted) as e:
             print(e)
             return

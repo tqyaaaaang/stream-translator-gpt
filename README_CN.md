@@ -176,6 +176,7 @@ python3 ./stream-translator-gpt/translator.py
 | `--gpt_base_url`                   | https://api.openai.com/v1 | 自定义GPT的API地址。                                                                                                       |
 | `--gemini_base_url`                |                           | 自定义Gemini的API地址。                                                                                                    |
 | `--processing_proxy`               |                           | 使用指定的HTTP/HTTPS/SOCKS代理来连接Whisper/GPT API（目前Gemini尚不支持在程序内指定代理），例如http://127.0.0.1:7890。     |
+| `--use_json_result`                |                           | 在LLM翻译中使用JSON格式返回结果，用于一些本地部署的模型。                                                                  |
 | `--retry_if_translation_fails`     |                           | 当翻译超时/失败时重试。用于离线生成字幕。                                                                                  |
 | **输出选项**                       |
 | `--output_timestamps`              |                           | 输出文本时同时输出时间戳。                                                                                                 |
