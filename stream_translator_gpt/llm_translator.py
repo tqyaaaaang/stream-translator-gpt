@@ -55,8 +55,8 @@ class LLMClint():
         GPT = 'GPT'
         GEMINI = 'Gemini'
 
-    def __init__(self, llm_type: str, model: str, prompt: str, history_size: int,
-                 proxy: str, use_json_result: bool) -> None:
+    def __init__(self, llm_type: str, model: str, prompt: str, history_size: int, proxy: str,
+                 use_json_result: bool) -> None:
         if llm_type not in (self.LLM_TYPE.GPT, self.LLM_TYPE.GEMINI):
             raise ValueError('Unknow LLM type: {}'.format(llm_type))
         print('Using {} API as translation engine.'.format(model))
@@ -104,7 +104,8 @@ class LLMClint():
 
             translation_task.translated_text = completion.choices[0].message.content
             if self.use_json_result:
-                translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
+                translation_task.translated_text = _parse_json_completion(
+                    translation_task.translated_text)
         except (APITimeoutError, APIConnectionError) as e:
             print(e)
             return
@@ -142,7 +143,8 @@ class LLMClint():
                                                safety_settings=safety_settings)
             translation_task.translated_text = response.text
             if self.use_json_result:
-                translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
+                translation_task.translated_text = _parse_json_completion(
+                    translation_task.translated_text)
         except (ValueError, InternalServerError, ResourceExhausted) as e:
             print(e)
             return
