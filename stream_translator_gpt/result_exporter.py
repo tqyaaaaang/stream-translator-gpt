@@ -15,11 +15,12 @@ def _send_to_cqhttp(url: str, token: str, proxies: dict, text: str):
 
 
 def _send_to_discord(webhook_url: str, proxies: dict, text: str):
-    data = {'content': text}
-    try:
-        requests.post(webhook_url, json=data, timeout=10, proxies=proxies)
-    except Exception as e:
-        print(e)
+    for sub_text in text.split('\n'):
+        data = {'content': sub_text}
+        try:
+            requests.post(webhook_url, json=data, timeout=10, proxies=proxies)
+        except Exception as e:
+            print(e)
 
 
 def _send_to_telegram(token: str, chat_id: int, proxies: dict, text: str):
