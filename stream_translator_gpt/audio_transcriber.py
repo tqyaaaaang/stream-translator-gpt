@@ -78,7 +78,7 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
 
     def __init__(self, language: str, proxy: str) -> None:
         self.client = OpenAI()
-        self.client = OpenAI(http_client=DefaultHttpxClient(proxies=proxy))
+        self.client = OpenAI(http_client=DefaultHttpxClient(proxy=proxy))
         self.language = language
 
     def __del__(self):
