@@ -60,6 +60,7 @@ class ResultExporter(LoopWorkerBase):
                 text_to_print = task.translated_text
                 if output_timestamps:
                     text_to_print = timestamp_text + ' ' + text_to_print
+                text_to_print = text_to_print.strip()
                 print('\033[1m{}\033[0m'.format(text_to_print))
                 text_to_send += task.translated_text
             text_to_send = text_to_send.strip()
