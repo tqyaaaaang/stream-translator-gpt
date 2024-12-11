@@ -77,7 +77,6 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
     # https://platform.openai.com/docs/api-reference/audio/createTranscription?lang=python
 
     def __init__(self, language: str, proxy: str) -> None:
-        self.client = OpenAI()
         self.client = OpenAI(http_client=DefaultHttpxClient(proxy=proxy))
         self.language = language
 
