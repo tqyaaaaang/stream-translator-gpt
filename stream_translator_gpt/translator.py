@@ -21,7 +21,7 @@ def _start_daemon_thread(func, *args, **kwargs):
     thread.start()
 
 
-def main(url, format, cookies, input_proxy, device_index, frame_duration,
+def main(url, format, cookies, input_proxy, device_index, device_recording_interval, frame_duration,
          continuous_no_speech_threshold, min_audio_length, max_audio_length,
          prefix_retention_length, vad_threshold, model, language, use_faster_whisper,
          use_whisper_api, whisper_filters, openai_api_key, google_api_key, gpt_translation_prompt,
@@ -141,6 +141,7 @@ def main(url, format, cookies, input_proxy, device_index, frame_duration,
         DeviceAudioGetter.work(
             device_index=device_index,
             frame_duration=frame_duration,
+            recording_interval=device_recording_interval,
             output_queue=getter_to_slicer_queue,
         )
     elif os.path.isabs(url):
@@ -196,6 +197,12 @@ def cli():
     parser.add_argument('--print_all_devices',
                         action='store_true',
                         help='Print all audio devices info then exit.')
+    parser.add_argument('--device_recording_interval',
+                        type=float,
+                        default=0.5,
+                        help='The shorter the recording interval, the lower the latency,'
+                        'but it will increase CPU usage.'
+                        'It is recommended to set it between 0.1 and 1.0.')
     parser.add_argument('--frame_duration',
                         type=float,
                         default=0.1,

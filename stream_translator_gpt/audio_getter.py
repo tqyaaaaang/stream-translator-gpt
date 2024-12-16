@@ -124,19 +124,22 @@ class LocalFileAudioGetter(LoopWorkerBase):
 
 class DeviceAudioGetter(LoopWorkerBase):
 
-    def __init__(self, device_index: int, frame_duration: float) -> None:
+    def __init__(self, device_index: int, frame_duration: float, recording_interval: float) -> None:
         import sounddevice as sd
         if device_index:
             sd.default.device[0] = device_index
         sd.default.dtype[0] = np.float32
         self.frame_duration = frame_duration
+        self.recording_frame_num = max(1, round(recording_interval / frame_duration))
         print('Recording device: {}'.format(sd.query_devices(sd.default.device[0])['name']))
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
         import sounddevice as sd
         while True:
-            audio = sd.rec(frames=round(SAMPLE_RATE * self.frame_duration),
+            audio = sd.rec(frames=round(SAMPLE_RATE * self.frame_duration * self.recording_frame_num),
                            samplerate=SAMPLE_RATE,
                            channels=1,
                            blocking=True).flatten()
-            output_queue.put(audio)
+            split_audios = np.array_split(audio, self.recording_frame_num)
+            for split_audio in split_audios:
+                output_queue.put(split_audio)
