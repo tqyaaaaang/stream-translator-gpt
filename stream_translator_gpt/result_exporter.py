@@ -24,8 +24,7 @@ def _send_to_discord(webhook_url: str, proxies: dict, text: str):
 
 
 def _send_to_telegram(token: str, chat_id: int, proxies: dict, text: str):
-    url = 'https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}'.format(
-        token, chat_id, text)
+    url = 'https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}'.format(token, chat_id, text)
     try:
         requests.post(url, timeout=10, proxies=proxies)
     except Exception as e:
@@ -45,14 +44,12 @@ class ResultExporter(LoopWorkerBase):
                 os.remove(output_file_path)
 
     def loop(self, input_queue: queue.SimpleQueue[TranslationTask], output_whisper_result: bool,
-             output_timestamps: bool, proxy: str, output_file_path: str, cqhttp_url: str,
-             cqhttp_token: str, discord_webhook_url: str, telegram_token: str,
-             telegram_chat_id: int):
+             output_timestamps: bool, proxy: str, output_file_path: str, cqhttp_url: str, cqhttp_token: str,
+             discord_webhook_url: str, telegram_token: str, telegram_chat_id: int):
         proxies = {"http": proxy, "https": proxy} if proxy else None
         while True:
             task = input_queue.get()
-            timestamp_text = '{} --> {}'.format(sec2str(task.time_range[0]),
-                                                sec2str(task.time_range[1]))
+            timestamp_text = '{} --> {}'.format(sec2str(task.time_range[0]), sec2str(task.time_range[1]))
             text_to_send = (task.transcribed_text + '\n') if output_whisper_result else ''
             if output_timestamps:
                 text_to_send = timestamp_text + '\n' + text_to_send

@@ -22,29 +22,24 @@ def _start_daemon_thread(func, *args, **kwargs):
 
 
 def main(url, format, cookies, input_proxy, device_index, device_recording_interval, frame_duration,
-         continuous_no_speech_threshold, min_audio_length, max_audio_length,
-         prefix_retention_length, vad_threshold, model, language, use_faster_whisper,
-         use_whisper_api, whisper_filters, openai_api_key, google_api_key, gpt_translation_prompt,
-         gpt_translation_history_size, gpt_model, gemini_model, gpt_translation_timeout,
-         gpt_base_url, gemini_base_url, processing_proxy, use_json_result,
-         retry_if_translation_fails, output_timestamps, hide_transcribe_result, output_proxy,
-         output_file_path, cqhttp_url, cqhttp_token, discord_webhook_url, telegram_token,
-         telegram_chat_id, **transcribe_options):
+         continuous_no_speech_threshold, min_audio_length, max_audio_length, prefix_retention_length, vad_threshold,
+         model, language, use_faster_whisper, use_whisper_api, whisper_filters, openai_api_key, google_api_key,
+         gpt_translation_prompt, gpt_translation_history_size, gpt_model, gemini_model, gpt_translation_timeout,
+         gpt_base_url, gemini_base_url, processing_proxy, use_json_result, retry_if_translation_fails,
+         output_timestamps, hide_transcribe_result, output_proxy, output_file_path, cqhttp_url, cqhttp_token,
+         discord_webhook_url, telegram_token, telegram_chat_id, **transcribe_options):
     if openai_api_key:
         os.environ['OPENAI_API_KEY'] = openai_api_key
     if gpt_base_url:
         os.environ['OPENAI_BASE_URL'] = gpt_base_url
     if google_api_key:
         gemini_client_options = ClientOptions(api_endpoint=gemini_base_url)
-        genai.configure(api_key=google_api_key,
-                        client_options=gemini_client_options,
-                        transport='rest')
+        genai.configure(api_key=google_api_key, client_options=gemini_client_options, transport='rest')
 
     getter_to_slicer_queue = queue.SimpleQueue()
     slicer_to_transcriber_queue = queue.SimpleQueue()
     transcriber_to_translator_queue = queue.SimpleQueue()
-    translator_to_exporter_queue = queue.SimpleQueue(
-    ) if gpt_translation_prompt else transcriber_to_translator_queue
+    translator_to_exporter_queue = queue.SimpleQueue() if gpt_translation_prompt else transcriber_to_translator_queue
 
     _start_daemon_thread(
         ResultExporter.work,
@@ -194,9 +189,7 @@ def cli():
                         default=None,
                         help='The index of the device that needs to be recorded. '
                         'If not set, the system default recording device will be used.')
-    parser.add_argument('--print_all_devices',
-                        action='store_true',
-                        help='Print all audio devices info then exit.')
+    parser.add_argument('--print_all_devices', action='store_true', help='Print all audio devices info then exit.')
     parser.add_argument('--device_recording_interval',
                         type=float,
                         default=0.5,
@@ -212,14 +205,8 @@ def cli():
                         type=float,
                         default=0.5,
                         help='Slice if there is no speech for a continuous period in second.')
-    parser.add_argument('--min_audio_length',
-                        type=float,
-                        default=1.5,
-                        help='Minimum slice audio length in seconds.')
-    parser.add_argument('--max_audio_length',
-                        type=float,
-                        default=15.0,
-                        help='Maximum slice audio length in seconds.')
+    parser.add_argument('--min_audio_length', type=float, default=1.5, help='Minimum slice audio length in seconds.')
+    parser.add_argument('--max_audio_length', type=float, default=15.0, help='Maximum slice audio length in seconds.')
     parser.add_argument('--prefix_retention_length',
                         type=float,
                         default=0.5,
@@ -230,21 +217,17 @@ def cli():
                         help='The threshold of Voice activity detection.'
                         'if the speech probability of a frame is higher than this value, '
                         'then this frame is speech.')
-    parser.add_argument(
-        '--model',
-        type=str,
-        default='small',
-        help='Select Whisper/Faster-Whisper model size. '
-        'See https://github.com/openai/whisper#available-models-and-languages for available models.'
-    )
-    parser.add_argument(
-        '--language',
-        type=str,
-        default='auto',
-        help='Language spoken in the stream. '
-        'Default option is to auto detect the spoken language. '
-        'See https://github.com/openai/whisper#available-models-and-languages for available languages.'
-    )
+    parser.add_argument('--model',
+                        type=str,
+                        default='small',
+                        help='Select Whisper/Faster-Whisper model size. '
+                        'See https://github.com/openai/whisper#available-models-and-languages for available models.')
+    parser.add_argument('--language',
+                        type=str,
+                        default='auto',
+                        help='Language spoken in the stream. '
+                        'Default option is to auto detect the spoken language. '
+                        'See https://github.com/openai/whisper#available-models-and-languages for available languages.')
     parser.add_argument('--beam_size',
                         type=int,
                         default=5,
@@ -271,10 +254,7 @@ def cli():
                         type=str,
                         default=None,
                         help='OpenAI API key if using GPT translation / Whisper API.')
-    parser.add_argument('--google_api_key',
-                        type=str,
-                        default=None,
-                        help='Google API key if using Gemini translation.')
+    parser.add_argument('--google_api_key', type=str, default=None, help='Google API key if using Gemini translation.')
     parser.add_argument('--gpt_model',
                         type=str,
                         default='gpt-4o-mini',
@@ -283,59 +263,45 @@ def cli():
                         type=str,
                         default='gemini-1.5-flash',
                         help='Google\'s Gemini model name, gemini-1.5-flash / gemini-1.5-pro')
-    parser.add_argument(
-        '--gpt_translation_prompt',
-        type=str,
-        default=None,
-        help='If set, will translate result text to target language via GPT / Gemini API. '
-        'Example: \"Translate from Japanese to Chinese\"')
-    parser.add_argument(
-        '--gpt_translation_history_size',
-        type=int,
-        default=0,
-        help='The number of previous messages sent when calling the GPT / Gemini API. '
-        'If the history size is 0, the translation will be run parallelly. '
-        'If the history size > 0, the translation will be run serially.')
+    parser.add_argument('--gpt_translation_prompt',
+                        type=str,
+                        default=None,
+                        help='If set, will translate result text to target language via GPT / Gemini API. '
+                        'Example: \"Translate from Japanese to Chinese\"')
+    parser.add_argument('--gpt_translation_history_size',
+                        type=int,
+                        default=0,
+                        help='The number of previous messages sent when calling the GPT / Gemini API. '
+                        'If the history size is 0, the translation will be run parallelly. '
+                        'If the history size > 0, the translation will be run serially.')
     parser.add_argument('--gpt_translation_timeout',
                         type=int,
                         default=10,
                         help='If the GPT / Gemini translation exceeds this number of seconds, '
                         'the translation will be discarded.')
-    parser.add_argument('--gpt_base_url',
+    parser.add_argument('--gpt_base_url', type=str, default=None, help='Customize the API endpoint of GPT.')
+    parser.add_argument('--gemini_base_url', type=str, default=None, help='Customize the API endpoint of Gemini.')
+    parser.add_argument('--processing_proxy',
                         type=str,
                         default=None,
-                        help='Customize the API endpoint of GPT.')
-    parser.add_argument('--gemini_base_url',
-                        type=str,
-                        default=None,
-                        help='Customize the API endpoint of Gemini.')
-    parser.add_argument(
-        '--processing_proxy',
-        type=str,
-        default=None,
-        help='Use the specified HTTP/HTTPS/SOCKS proxy for Whisper/GPT API '
-        '(Gemini currently doesn\'t support specifying a proxy within the program), '
-        'e.g. http://127.0.0.1:7890.')
-    parser.add_argument(
-        '--use_json_result',
-        action='store_true',
-        help='Using JSON result in LLM translation for some locally deployed models.')
-    parser.add_argument(
-        '--retry_if_translation_fails',
-        action='store_true',
-        help='Retry when translation times out/fails. Used to generate subtitles offline.')
+                        help='Use the specified HTTP/HTTPS/SOCKS proxy for Whisper/GPT API '
+                        '(Gemini currently doesn\'t support specifying a proxy within the program), '
+                        'e.g. http://127.0.0.1:7890.')
+    parser.add_argument('--use_json_result',
+                        action='store_true',
+                        help='Using JSON result in LLM translation for some locally deployed models.')
+    parser.add_argument('--retry_if_translation_fails',
+                        action='store_true',
+                        help='Retry when translation times out/fails. Used to generate subtitles offline.')
     parser.add_argument('--output_timestamps',
                         action='store_true',
                         help='Output the timestamp of the text when outputting the text.')
-    parser.add_argument('--hide_transcribe_result',
-                        action='store_true',
-                        help='Hide the result of Whisper transcribe.')
-    parser.add_argument(
-        '--output_proxy',
-        type=str,
-        default=None,
-        help='Use the specified HTTP/HTTPS/SOCKS proxy for Cqhttp/Discord/Telegram, '
-        'e.g. http://127.0.0.1:7890.')
+    parser.add_argument('--hide_transcribe_result', action='store_true', help='Hide the result of Whisper transcribe.')
+    parser.add_argument('--output_proxy',
+                        type=str,
+                        default=None,
+                        help='Use the specified HTTP/HTTPS/SOCKS proxy for Cqhttp/Discord/Telegram, '
+                        'e.g. http://127.0.0.1:7890.')
     parser.add_argument('--output_file_path',
                         type=str,
                         default=None,
@@ -370,18 +336,14 @@ def cli():
 
     if args['model'].endswith('.en'):
         if args['model'] == 'large.en':
-            print(
-                'English model does not have large model, please choose from {tiny.en, small.en, medium.en}'
-            )
+            print('English model does not have large model, please choose from {tiny.en, small.en, medium.en}')
             sys.exit(0)
         if args['language'] != 'English' and args['language'] != 'en':
             if args['language'] == 'auto':
                 print('Using .en model, setting language from auto to English')
                 args['language'] = 'en'
             else:
-                print(
-                    'English model cannot be used to detect non english language, please choose a non .en model'
-                )
+                print('English model cannot be used to detect non english language, please choose a non .en model')
                 sys.exit(0)
 
     if args['use_faster_whisper'] and args['use_whisper_api']:

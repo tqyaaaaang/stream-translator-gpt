@@ -104,8 +104,7 @@ class LLMClint():
 
             translation_task.translated_text = completion.choices[0].message.content
             if self.use_json_result:
-                translation_task.translated_text = _parse_json_completion(
-                    translation_task.translated_text)
+                translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (APITimeoutError, APIConnectionError) as e:
             print(e)
             return
@@ -138,13 +137,10 @@ class LLMClint():
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
         try:
-            response = client.generate_content(messages,
-                                               generation_config=config,
-                                               safety_settings=safety_settings)
+            response = client.generate_content(messages, generation_config=config, safety_settings=safety_settings)
             translation_task.translated_text = response.text
             if self.use_json_result:
-                translation_task.translated_text = _parse_json_completion(
-                    translation_task.translated_text)
+                translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (ValueError, InternalServerError, ResourceExhausted) as e:
             print(e)
             return
@@ -178,9 +174,8 @@ class ParallelTranslator(LoopWorkerBase):
 
     def get_results(self):
         results = []
-        while self.processing_queue and (self.processing_queue[0].translated_text or
-                                         datetime.utcnow() - self.processing_queue[0].start_time
-                                         > timedelta(seconds=self.timeout)):
+        while self.processing_queue and (self.processing_queue[0].translated_text or datetime.utcnow() -
+                                         self.processing_queue[0].start_time > timedelta(seconds=self.timeout)):
             task = self.processing_queue.popleft()
             if task.translated_text:
                 results.append(task)
@@ -192,8 +187,7 @@ class ParallelTranslator(LoopWorkerBase):
                     print('Translation timeout or failed: {}'.format(task.transcribed_text))
         return results
 
-    def loop(self, input_queue: queue.SimpleQueue[TranslationTask],
-             output_queue: queue.SimpleQueue[TranslationTask]):
+    def loop(self, input_queue: queue.SimpleQueue[TranslationTask], output_queue: queue.SimpleQueue[TranslationTask]):
         while True:
             if not input_queue.empty() and len(self.processing_queue) < self.PARALLEL_MAX_NUMBER:
                 task = input_queue.get()
@@ -217,19 +211,17 @@ class SerialTranslator(LoopWorkerBase):
         thread.daemon = True
         thread.start()
 
-    def loop(self, input_queue: queue.SimpleQueue[TranslationTask],
-             output_queue: queue.SimpleQueue[TranslationTask]):
+    def loop(self, input_queue: queue.SimpleQueue[TranslationTask], output_queue: queue.SimpleQueue[TranslationTask]):
         current_task = None
         while True:
             if current_task:
-                if (current_task.translated_text or datetime.utcnow() - current_task.start_time
-                        > timedelta(seconds=self.timeout)):
+                if (current_task.translated_text or
+                        datetime.utcnow() - current_task.start_time > timedelta(seconds=self.timeout)):
                     if not current_task.translated_text:
                         if self.retry_if_translation_fails:
                             self.trigger(current_task)
                             continue
-                        print('Translation timeout or failed: {}'.format(
-                            current_task.transcribed_text))
+                        print('Translation timeout or failed: {}'.format(current_task.transcribed_text))
                     output_queue.put(current_task)
                     current_task = None
 
