@@ -75,9 +75,17 @@ class FasterWhisper(OpenaiWhisper):
 class RemoteOpenaiWhisper(OpenaiWhisper):
     # https://platform.openai.com/docs/api-reference/audio/createTranscription?lang=python
 
-    def __init__(self, language: str, proxy: str) -> None:
-        self.client = OpenAI(http_client=DefaultHttpxClient(proxy=proxy))
+    def __init__(self, language: str, proxy: str, model: str, base_url: str | None = None, api_key: str | None = None) -> None:
+        if base_url is None:
+            self.client = OpenAI(http_client=DefaultHttpxClient(proxy=proxy))
+        else:
+            self.client = OpenAI(base_url=base_url, api_key=api_key)
+        if model == 'small': # defalut param
+            self.model = 'whisper-1'
+        else:
+            self.model = model
         self.language = language
+        logger.debug('Setup remote whisper connection with base_url=%s, api_key=****%s, and language=%s', self.client.base_url, self.client.api_key[-4:], self.language)
 
     def __del__(self):
         if os.path.exists(TEMP_AUDIO_FILE_NAME):
@@ -87,7 +95,7 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
         with open(TEMP_AUDIO_FILE_NAME, 'wb') as audio_file:
             write_audio(audio_file, SAMPLE_RATE, audio)
         with open(TEMP_AUDIO_FILE_NAME, 'rb') as audio_file:
-            result = self.client.audio.transcriptions.create(model='whisper-1', file=audio_file,
+            result = self.client.audio.transcriptions.create(model=self.model, file=audio_file,
                                                              language=self.language).text
         os.remove(TEMP_AUDIO_FILE_NAME)
         return result
