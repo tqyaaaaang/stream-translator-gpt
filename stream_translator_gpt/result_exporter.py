@@ -1,8 +1,12 @@
 import os
 import queue
 import requests
+import logging
 
 from .common import TranslationTask, LoopWorkerBase, sec2str
+
+
+logger = logging.getLogger('main')
 
 
 def _send_to_cqhttp(url: str, token: str, proxies: dict, text: str):
@@ -11,7 +15,7 @@ def _send_to_cqhttp(url: str, token: str, proxies: dict, text: str):
     try:
         requests.post(url, headers=headers, data=data, timeout=10, proxies=proxies)
     except Exception as e:
-        print(e)
+        logger.warning(str(e))
 
 
 def _send_to_discord(webhook_url: str, proxies: dict, text: str):
@@ -20,7 +24,7 @@ def _send_to_discord(webhook_url: str, proxies: dict, text: str):
         try:
             requests.post(webhook_url, json=data, timeout=10, proxies=proxies)
         except Exception as e:
-            print(e)
+            logger.warning(str(e))
 
 
 def _send_to_telegram(token: str, chat_id: int, proxies: dict, text: str):
@@ -28,7 +32,7 @@ def _send_to_telegram(token: str, chat_id: int, proxies: dict, text: str):
     try:
         requests.post(url, timeout=10, proxies=proxies)
     except Exception as e:
-        print(e)
+        logger.warning(str(e))
 
 
 def _output_to_file(file_path: str, text: str):

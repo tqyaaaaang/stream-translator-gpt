@@ -1,5 +1,6 @@
 import os
 import queue
+import logging
 from scipy.io.wavfile import write as write_audio
 
 import numpy as np
@@ -9,6 +10,9 @@ from . import filters
 from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str
 
 TEMP_AUDIO_FILE_NAME = '_whisper_api_temp.wav'
+
+
+logger = logging.getLogger('main')
 
 
 def _filter_text(text: str, whisper_filters: str):
@@ -24,7 +28,7 @@ def _filter_text(text: str, whisper_filters: str):
 class OpenaiWhisper(LoopWorkerBase):
 
     def __init__(self, model: str, language: str) -> None:
-        print('Loading whisper model: {}'.format(model))
+        logger.info('Loading whisper model: %s', model)
         import whisper
         self.model = whisper.load_model(model)
         self.language = language
@@ -41,7 +45,7 @@ class OpenaiWhisper(LoopWorkerBase):
                                                  whisper_filters).strip()
             if not task.transcribed_text:
                 if print_result:
-                    print('skip...')
+                    logger.info('skip...')
                 continue
             if print_result:
                 if output_timestamps:
@@ -55,7 +59,7 @@ class OpenaiWhisper(LoopWorkerBase):
 class FasterWhisper(OpenaiWhisper):
 
     def __init__(self, model: str, language: str) -> None:
-        print('Loading faster-whisper model: {}'.format(model))
+        logger.info('Loading faster-whisper model: %s', model)
         from faster_whisper import WhisperModel
         self.model = WhisperModel(model)
         self.language = language

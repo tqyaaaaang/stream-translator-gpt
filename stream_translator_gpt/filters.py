@@ -1,4 +1,8 @@
 import re
+import logging
+
+
+logger = logging.getLogger('main')
 
 
 def emoji_filter(text: str):
@@ -15,12 +19,12 @@ def japanese_stream_filter(text: str):
 
     for filter_text in ['字幕作成', 'この動画の字幕', 'by ']:
         if filter_text in text:
-            print('filter', text)
+            logger.info('filter %s', text)
             return ''
 
     for filter_text in ['エンディング', '次回予告', 'またね', 'ありがとうございました', 'それではまた']:
         if filter_text == text:
-            print('filter', text)
+            logger.info('filter %s', text)
             return ''
 
     if len(text) < 3:

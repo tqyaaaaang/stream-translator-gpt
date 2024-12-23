@@ -3,6 +3,7 @@ import queue
 import threading
 import time
 import re
+import logging
 from collections import deque
 from datetime import datetime, timedelta
 
@@ -12,6 +13,9 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from openai import OpenAI, DefaultHttpxClient, APITimeoutError, APIConnectionError
 
 from .common import TranslationTask, LoopWorkerBase
+
+
+logger = logging.getLogger('main')
 
 
 # The double quotes in the values of JSON have not been escaped, so manual escaping is necessary.
@@ -59,7 +63,7 @@ class LLMClint():
                  use_json_result: bool) -> None:
         if llm_type not in (self.LLM_TYPE.GPT, self.LLM_TYPE.GEMINI):
             raise ValueError('Unknow LLM type: {}'.format(llm_type))
-        print('Using {} API as translation engine.'.format(model))
+        logger.info('Using %s API as translation engine.', model)
         self.llm_type = llm_type
         self.model = model
         self.prompt = prompt
@@ -106,7 +110,7 @@ class LLMClint():
             if self.use_json_result:
                 translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (APITimeoutError, APIConnectionError) as e:
-            print(e)
+            logger.warning(str(e))
             return
         if self.history_size:
             self._append_history_message(user_content, translation_task.translated_text)
@@ -142,7 +146,7 @@ class LLMClint():
             if self.use_json_result:
                 translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (ValueError, InternalServerError, ResourceExhausted, TooManyRequests) as e:
-            print(e)
+            logger.warning(str(e))
             return
         if self.history_size:
             self._append_history_message(user_content, translation_task.translated_text)
@@ -168,7 +172,7 @@ class ParallelTranslator(LoopWorkerBase):
     def trigger(self, translation_task: TranslationTask):
         self.processing_queue.append(translation_task)
         translation_task.start_time = datetime.utcnow()
-        thread = threading.Thread(target=self.llm_client.translate, args=(translation_task,))
+        thread = threading.Thread(target=self.llm_client.translate, name='translator-instance', args=(translation_task,))
         thread.daemon = True
         thread.start()
 
@@ -184,7 +188,7 @@ class ParallelTranslator(LoopWorkerBase):
                     self.trigger(task)
                 else:
                     results.append(task)
-                    print('Translation timeout or failed: {}'.format(task.transcribed_text))
+                    logger.warning('Translation timeout or failed: %s', task.transcribed_text)
         return results
 
     def loop(self, input_queue: queue.SimpleQueue[TranslationTask], output_queue: queue.SimpleQueue[TranslationTask]):
@@ -207,7 +211,7 @@ class SerialTranslator(LoopWorkerBase):
 
     def trigger(self, translation_task: TranslationTask):
         translation_task.start_time = datetime.utcnow()
-        thread = threading.Thread(target=self.llm_client.translate, args=(translation_task,))
+        thread = threading.Thread(target=self.llm_client.translate, name='translator-instance', args=(translation_task,))
         thread.daemon = True
         thread.start()
 
@@ -221,7 +225,7 @@ class SerialTranslator(LoopWorkerBase):
                         if self.retry_if_translation_fails:
                             self.trigger(current_task)
                             continue
-                        print('Translation timeout or failed: {}'.format(current_task.transcribed_text))
+                        logger.warning('Translation timeout or failed: %s', current_task.transcribed_text)
                     output_queue.put(current_task)
                     current_task = None
 

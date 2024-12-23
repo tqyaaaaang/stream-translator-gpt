@@ -4,6 +4,7 @@ import queue
 import sys
 import threading
 import time
+import logging
 
 import google.generativeai as genai
 from google.api_core.client_options import ClientOptions
@@ -15,13 +16,16 @@ from .llm_translator import LLMClint, ParallelTranslator, SerialTranslator
 from .result_exporter import ResultExporter
 
 
-def _start_daemon_thread(func, *args, **kwargs):
-    thread = threading.Thread(target=func, args=args, kwargs=kwargs)
+logger = logging.getLogger('main')
+
+
+def _start_daemon_thread(func, name, *args, **kwargs):
+    thread = threading.Thread(target=func, name=name, args=args, kwargs=kwargs)
     thread.daemon = True
     thread.start()
 
 
-def main(url, format, cookies, input_proxy, device_index, device_recording_interval, frame_duration,
+def main(url, format, cookies, input_proxy, is_file, device_index, device_recording_interval, frame_duration,
          continuous_no_speech_threshold, min_audio_length, max_audio_length, prefix_retention_length, vad_threshold,
          model, language, use_faster_whisper, use_whisper_api, whisper_filters, openai_api_key, google_api_key,
          gpt_translation_prompt, gpt_translation_history_size, gpt_model, gemini_model, gpt_translation_timeout,
@@ -43,6 +47,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
 
     _start_daemon_thread(
         ResultExporter.work,
+        'exporter',
         output_whisper_result=not hide_transcribe_result,
         output_timestamps=output_timestamps,
         proxy=output_proxy,
@@ -76,6 +81,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
         if gpt_translation_history_size == 0:
             _start_daemon_thread(
                 ParallelTranslator.work,
+                'translator',
                 llm_client=llm_client,
                 timeout=gpt_translation_timeout,
                 retry_if_translation_fails=retry_if_translation_fails,
@@ -85,6 +91,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
         else:
             _start_daemon_thread(
                 SerialTranslator.work,
+                'translator',
                 llm_client=llm_client,
                 timeout=gpt_translation_timeout,
                 retry_if_translation_fails=retry_if_translation_fails,
@@ -93,6 +100,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
             )
     if use_faster_whisper:
         _start_daemon_thread(FasterWhisper.work,
+                             'transcriber',
                              model=model,
                              language=language,
                              print_result=not hide_transcribe_result,
@@ -103,6 +111,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
                              **transcribe_options)
     elif use_whisper_api:
         _start_daemon_thread(RemoteOpenaiWhisper.work,
+                             'transcriber',
                              language=language,
                              proxy=processing_proxy,
                              print_result=not hide_transcribe_result,
@@ -113,6 +122,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
                              **transcribe_options)
     else:
         _start_daemon_thread(OpenaiWhisper.work,
+                             'transcriber',
                              model=model,
                              language=language,
                              print_result=not hide_transcribe_result,
@@ -123,6 +133,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
                              **transcribe_options)
     _start_daemon_thread(
         AudioSlicer.work,
+        'slicer',
         frame_duration=frame_duration,
         continuous_no_speech_threshold=continuous_no_speech_threshold,
         min_audio_length=min_audio_length,
@@ -139,7 +150,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
             recording_interval=device_recording_interval,
             output_queue=getter_to_slicer_queue,
         )
-    elif os.path.isabs(url):
+    elif is_file or os.path.isabs(url):
         LocalFileAudioGetter.work(
             file_path=url,
             frame_duration=frame_duration,
@@ -159,7 +170,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
     while (not getter_to_slicer_queue.empty() or not slicer_to_transcriber_queue.empty() or
            not transcriber_to_translator_queue.empty() or not translator_to_exporter_queue.empty()):
         time.sleep(5)
-    print('Stream ended')
+    logger.info('Stream ended')
 
 
 def cli():
@@ -184,6 +195,10 @@ def cli():
                         default=None,
                         help='Use the specified HTTP/HTTPS/SOCKS proxy for yt-dlp, '
                         'e.g. http://127.0.0.1:7890.')
+    parser.add_argument('--is_file',
+                        dest='is_file',
+                        action='store_true',
+                        help='Parse the input URL as a local file path')
     parser.add_argument('--device_index',
                         type=int,
                         default=None,
@@ -325,6 +340,10 @@ def cli():
                         default=None,
                         help='If set, will send the result text to this Telegram chat. '
                         'Needs to be used with \"--telegram_token\".')
+    parser.add_argument('--verbose',
+                        dest='verbose',
+                        action='store_true',
+                        help='Verbose mode.')
 
     args = parser.parse_args().__dict__
     url = args.pop('URL')
@@ -363,5 +382,23 @@ def cli():
 
     if args['beam_size'] == 0:
         args['beam_size'] = None
+
+    if args['verbose']:
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter(fmt='{asctime}.{msecs:03.0f}:{levelname}:{threadName}: {message}', datefmt='%H:%M:%S', style='{')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        
+        main_thread = threading.current_thread()
+        main_thread.name = 'main'
+    else:
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        formatter = logging.Formatter(fmt='%(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
 
     main(url, **args)
