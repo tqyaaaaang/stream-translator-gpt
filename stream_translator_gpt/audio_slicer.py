@@ -2,12 +2,17 @@ import os
 import queue
 import torch
 import warnings
+import time
+import logging
 
 import numpy as np
 
-from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase
+from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, LogTime
 
 warnings.filterwarnings('ignore')
+
+
+logger = logging.getLogger('main')
 
 
 def _init_jit_model(model_path: str, device=torch.device('cpu')):
@@ -59,7 +64,10 @@ class AudioSlicer(LoopWorkerBase):
 
     def put(self, audio: np.array):
         self.counter += 1
-        if self.vad.is_speech(audio, self.vad_threshold, self.sampling_rate):
+        with LogTime('', level=logging.DEBUG) as log_time:
+            is_speech = self.vad.is_speech(audio, self.vad_threshold, self.sampling_rate)
+            log_time.set_log ('slicer at block %d decided is_speech = %s', self.counter, repr(is_speech))
+        if is_speech:
             self.audio_buffer.append(audio)
             self.speech_count += 1
             self.continuous_no_speech_count = 0
@@ -93,6 +101,7 @@ class AudioSlicer(LoopWorkerBase):
         # self.vad.reset_states()
         slice_second = self.counter * self.frame_duration
         last_slice_second = self.last_slice_second
+        logger.info('slicer decided to slice %.3f to %.3f', last_slice_second, slice_second)
         self.last_slice_second = slice_second
         return concatenate_audio, (last_slice_second, slice_second)
 

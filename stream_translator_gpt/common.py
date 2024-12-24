@@ -1,9 +1,14 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
+import logging
+import time
 
 import numpy as np
 from whisper.audio import SAMPLE_RATE
+
+
+logger = logging.getLogger('main')
 
 
 class TranslationTask:
@@ -44,3 +49,26 @@ def sec2str(second: float):
     result = dt.strftime('%H:%M:%S')
     result += ',' + str(int(second * 10 % 10))
     return result
+
+
+class LogTime:
+    def __init__(self, text, *args, level = logging.INFO):
+        self.text = text
+        self.args = args
+        self.level = level
+
+    def set_log (self, text, *args) -> None:
+        self.text = text
+        self.args = args
+
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+
+    def __exit__(self, *args):
+        end_time = time.time()
+        duration_ms = (end_time - self.start_time) * 1000
+        if self.text:
+            logger.log(self.level, self.text + ', run in time %.2fms', *self.args, duration_ms)
+        else:
+            logger.log(self.level, self.text, *self.args)

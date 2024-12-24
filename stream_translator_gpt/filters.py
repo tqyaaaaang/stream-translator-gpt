@@ -19,12 +19,12 @@ def japanese_stream_filter(text: str):
 
     for filter_text in ['字幕作成', 'この動画の字幕', 'by ']:
         if filter_text in text:
-            logger.info('filter %s', text)
+            logger.warning('filter %s', text)
             return ''
 
     for filter_text in ['エンディング', '次回予告', 'またね', 'ありがとうございました', 'それではまた']:
         if filter_text == text:
-            logger.info('filter %s', text)
+            logger.warning('filter %s', text)
             return ''
 
     if len(text) < 3:

@@ -12,7 +12,7 @@ from google.api_core.exceptions import InternalServerError, ResourceExhausted, T
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from openai import OpenAI, DefaultHttpxClient, APITimeoutError, APIConnectionError
 
-from .common import TranslationTask, LoopWorkerBase
+from .common import TranslationTask, LoopWorkerBase, LogTime
 
 
 logger = logging.getLogger('main')
@@ -63,7 +63,7 @@ class LLMClint():
                  use_json_result: bool) -> None:
         if llm_type not in (self.LLM_TYPE.GPT, self.LLM_TYPE.GEMINI):
             raise ValueError('Unknow LLM type: {}'.format(llm_type))
-        logger.info('Using %s API as translation engine.', model)
+        logger.warning('Using %s API as translation engine.', model)
         self.llm_type = llm_type
         self.model = model
         self.prompt = prompt
@@ -87,7 +87,9 @@ class LLMClint():
 
     def _translate_by_gpt(self, translation_task: TranslationTask):
         # https://platform.openai.com/docs/api-reference/chat/create?lang=python
+        logger.debug('initiating OpenAI API client')
         client = OpenAI(http_client=DefaultHttpxClient(proxy=self.proxy))
+        logger.debug('preparing request')
         system_prompt = 'You are a translation engine.'
         if self.use_json_result:
             system_prompt += " Output the answer in json format, key is translation."
@@ -96,6 +98,7 @@ class LLMClint():
         user_content = '{}: \n{}'.format(self.prompt, translation_task.transcribed_text)
         messages.append({'role': 'user', 'content': user_content})
         try:
+            logger.debug('sending translation task to OpenAI API')
             completion = client.chat.completions.create(
                 model=self.model,
                 temperature=0,
@@ -106,11 +109,12 @@ class LLMClint():
                 messages=messages,
             )
 
+            logger.debug('response received')
             translation_task.translated_text = completion.choices[0].message.content
             if self.use_json_result:
                 translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (APITimeoutError, APIConnectionError) as e:
-            logger.warning(str(e))
+            logger.error(str(e))
             return
         if self.history_size:
             self._append_history_message(user_content, translation_task.translated_text)
@@ -129,7 +133,9 @@ class LLMClint():
 
     def _translate_by_gemini(self, translation_task: TranslationTask):
         # https://ai.google.dev/tutorials/python_quickstart
+        logger.debug('initiating Gemini API client')
         client = genai.GenerativeModel(self.model)
+        logger.debug('preparing request')
         messages = self._gpt_to_gemini(self.history_messages)
         user_content = '{}: \n{}'.format(self.prompt, translation_task.transcribed_text)
         messages.append({'role': 'user', 'parts': [user_content]})
@@ -141,23 +147,26 @@ class LLMClint():
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
         try:
+            logger.debug('sending translation task to OpenAI API')
             response = client.generate_content(messages, generation_config=config, safety_settings=safety_settings)
+            logger.debug('response received')
             translation_task.translated_text = response.text
             if self.use_json_result:
                 translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (ValueError, InternalServerError, ResourceExhausted, TooManyRequests) as e:
-            logger.warning(str(e))
+            logger.error(str(e))
             return
         if self.history_size:
             self._append_history_message(user_content, translation_task.translated_text)
 
     def translate(self, translation_task: TranslationTask):
-        if self.llm_type == self.LLM_TYPE.GPT:
-            self._translate_by_gpt(translation_task)
-        elif self.llm_type == self.LLM_TYPE.GEMINI:
-            self._translate_by_gemini(translation_task)
-        else:
-            raise ValueError('Unknow LLM type: {}'.format(self.llm_type))
+        with LogTime('translated task %d', translation_task.id):
+            if self.llm_type == self.LLM_TYPE.GPT:
+                self._translate_by_gpt(translation_task)
+            elif self.llm_type == self.LLM_TYPE.GEMINI:
+                self._translate_by_gemini(translation_task)
+            else:
+                raise ValueError('Unknow LLM type: {}'.format(self.llm_type))
 
 
 class ParallelTranslator(LoopWorkerBase):
@@ -172,7 +181,7 @@ class ParallelTranslator(LoopWorkerBase):
     def trigger(self, translation_task: TranslationTask):
         self.processing_queue.append(translation_task)
         translation_task.start_time = datetime.utcnow()
-        thread = threading.Thread(target=self.llm_client.translate, name='translator-instance', args=(translation_task,))
+        thread = threading.Thread(target=self.llm_client.translate, name=f'translator-instance-{translation_task.id}', args=(translation_task,))
         thread.daemon = True
         thread.start()
 
@@ -188,7 +197,7 @@ class ParallelTranslator(LoopWorkerBase):
                     self.trigger(task)
                 else:
                     results.append(task)
-                    logger.warning('Translation timeout or failed: %s', task.transcribed_text)
+                    logger.error('Translation timeout or failed: %s', task.transcribed_text)
         return results
 
     def loop(self, input_queue: queue.SimpleQueue[TranslationTask], output_queue: queue.SimpleQueue[TranslationTask]):
@@ -212,7 +221,7 @@ class SerialTranslator(LoopWorkerBase):
 
     def trigger(self, translation_task: TranslationTask):
         translation_task.start_time = datetime.utcnow()
-        thread = threading.Thread(target=self.llm_client.translate, name='translator-instance', args=(translation_task,))
+        thread = threading.Thread(target=self.llm_client.translate, name=f'translator-instance-{translation_task.id}', args=(translation_task,))
         thread.daemon = True
         thread.start()
 
@@ -224,9 +233,10 @@ class SerialTranslator(LoopWorkerBase):
                         datetime.utcnow() - current_task.start_time > timedelta(seconds=self.timeout)):
                     if not current_task.translated_text:
                         if self.retry_if_translation_fails:
+                            logger.info('Translation timeout detected, retrying: %s', current_task.transcribed_text)
                             self.trigger(current_task)
                             continue
-                        logger.warning('Translation timeout or failed: %s', current_task.transcribed_text)
+                        logger.error('Translation timeout or failed: %s', current_task.transcribed_text)
                     current_task.phase = TranslationTask.Phase.TRANSLATED
                     output_queue.put(current_task)
                     current_task = None

@@ -7,7 +7,7 @@ import numpy as np
 from openai import OpenAI, DefaultHttpxClient
 
 from . import filters
-from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str
+from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, LogTime
 
 TEMP_AUDIO_FILE_NAME = '_whisper_api_temp.wav'
 
@@ -28,7 +28,7 @@ def _filter_text(text: str, whisper_filters: str):
 class OpenaiWhisper(LoopWorkerBase):
 
     def __init__(self, model: str, language: str) -> None:
-        logger.info('Loading whisper model: %s', model)
+        logger.warning('Loading whisper model: %s', model)
         import whisper
         self.model = whisper.load_model(model)
         self.language = language
@@ -41,11 +41,13 @@ class OpenaiWhisper(LoopWorkerBase):
              whisper_filters: str, print_result: bool, output_timestamps: bool, **transcribe_options):
         while True:
             task = input_queue.get()
-            task.transcribed_text = _filter_text(self.transcribe(task.audio, **transcribe_options),
-                                                 whisper_filters).strip()
+            logger.debug('new transcription task %d from %s to %s, audio length %d', task.id, sec2str(task.time_range[0]), sec2str(task.time_range[1]), len(task.audio))
+            with LogTime('transcribed task %d from %s to %s', task.id, sec2str(task.time_range[0]), sec2str(task.time_range[1])):
+                task.transcribed_text = _filter_text(self.transcribe(task.audio, **transcribe_options),
+                                                    whisper_filters).strip()
             if not task.transcribed_text:
                 if print_result:
-                    logger.info('skip...')
+                    logger.warning('skip...')
                 continue
             if print_result:
                 if output_timestamps:
@@ -60,7 +62,7 @@ class OpenaiWhisper(LoopWorkerBase):
 class FasterWhisper(OpenaiWhisper):
 
     def __init__(self, model: str, language: str) -> None:
-        logger.info('Loading faster-whisper model: %s', model)
+        logger.warning('Loading faster-whisper model: %s', model)
         from faster_whisper import WhisperModel
         self.model = WhisperModel(model)
         self.language = language
@@ -86,17 +88,20 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
         else:
             self.model = model
         self.language = language
-        logger.debug('Setup remote whisper connection with base_url=%s, api_key=****%s, and language=%s', self.client.base_url, self.client.api_key[-4:], self.language)
+        logger.info('setup remote whisper connection with base_url=%s, api_key=****%s, and language=%s', self.client.base_url, self.client.api_key[-4:], self.language)
 
     def __del__(self):
         if os.path.exists(TEMP_AUDIO_FILE_NAME):
             os.remove(TEMP_AUDIO_FILE_NAME)
 
     def transcribe(self, audio: np.array, **transcribe_options) -> str:
+        logger.debug('preparing audio for transcription')
         with open(TEMP_AUDIO_FILE_NAME, 'wb') as audio_file:
             write_audio(audio_file, SAMPLE_RATE, audio)
+        logger.debug('sending audio to remote Whisper API')
         with open(TEMP_AUDIO_FILE_NAME, 'rb') as audio_file:
             result = self.client.audio.transcriptions.create(model=self.model, file=audio_file,
                                                              language=self.language).text
+        logger.debug('result from remote Whisper API received')
         os.remove(TEMP_AUDIO_FILE_NAME)
         return result

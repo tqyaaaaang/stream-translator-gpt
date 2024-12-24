@@ -174,7 +174,7 @@ def main(url, format, cookies, input_proxy, is_file, device_index, device_record
     while (not getter_to_slicer_queue.empty() or not slicer_to_transcriber_queue.empty() or
            not transcriber_to_translator_queue.empty() or not translator_to_exporter_queue.empty()):
         time.sleep(5)
-    logger.info('Stream ended')
+    logger.error('Stream ended')
 
 
 def cli():
@@ -351,8 +351,11 @@ def cli():
                         'Needs to be used with \"--telegram_token\".')
     parser.add_argument('--verbose',
                         dest='verbose',
-                        action='store_true',
-                        help='Verbose mode.')
+                        type=int,
+                        nargs='?',
+                        default=0,
+                        const=1,
+                        help='Verbose mode. Use --verbose 2 to output more detailed debugging messages.')
 
     args = parser.parse_args().__dict__
     url = args.pop('URL')
@@ -393,13 +396,18 @@ def cli():
         args['beam_size'] = None
 
     if args['verbose']:
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.INFO)
 
         log_queue = queue.Queue()
         handler = QueueHandler(log_queue)
-        handler.setLevel(logging.DEBUG)
+        handler.setLevel(logging.INFO)
         formatter = logging.Formatter(fmt='{asctime}.{msecs:03.0f}:{levelname}:{threadName}: {message}', datefmt='%H:%M:%S', style='{')
         handler.setFormatter(formatter)
+
+        if args['verbose'] >= 2:
+            logger.setLevel(logging.DEBUG)
+            handler.setLevel(logging.DEBUG)
+
         logger.addHandler(handler)
 
         write_handler = logging.StreamHandler()
@@ -409,11 +417,11 @@ def cli():
         main_thread = threading.current_thread()
         main_thread.name = 'main'
     else:
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.WARNING)
 
         log_queue = queue.Queue()
         handler = QueueHandler(log_queue)
-        handler.setLevel(logging.INFO)
+        handler.setLevel(logging.WARNING)
         formatter = logging.Formatter(fmt='%(message)s')
         handler.setFormatter(formatter)
         logger.addHandler(handler)
