@@ -13,6 +13,7 @@ class TranslationTask:
         self.translated_text = None
         self.time_range = time_range
         self.start_time = None
+        self.translation_failed = False
 
 
 def _auto_args(func, kwargs):

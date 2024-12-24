@@ -15,7 +15,7 @@ from .common import TranslationTask, LoopWorkerBase
 
 
 # The double quotes in the values of JSON have not been escaped, so manual escaping is necessary.
-def escape_specific_quotes(input_string):
+def _escape_specific_quotes(input_string):
     quote_positions = [i for i, char in enumerate(input_string) if char == '"']
 
     if len(quote_positions) <= 4:
@@ -37,7 +37,7 @@ def _parse_json_completion(completion):
         return completion
 
     json_str = json_match.group(0)
-    json_str = escape_specific_quotes(json_str)
+    json_str = _escape_specific_quotes(json_str)
 
     try:
         json_obj = json.loads(json_str)
@@ -47,6 +47,10 @@ def _parse_json_completion(completion):
         return translate_text
     except json.JSONDecodeError:
         return completion
+
+
+def _is_task_timeout(task: TranslationTask, timeout: float) -> bool:
+    return datetime.utcnow() - task.start_time > timedelta(seconds=timeout)
 
 
 class LLMClint():
@@ -106,6 +110,7 @@ class LLMClint():
             if self.use_json_result:
                 translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (APITimeoutError, APIConnectionError) as e:
+            translation_task.translation_failed = True
             print(e)
             return
         if self.history_size:
@@ -142,6 +147,7 @@ class LLMClint():
             if self.use_json_result:
                 translation_task.translated_text = _parse_json_completion(translation_task.translated_text)
         except (ValueError, InternalServerError, ResourceExhausted, TooManyRequests) as e:
+            translation_task.translation_failed = True
             print(e)
             return
         if self.history_size:
@@ -165,36 +171,44 @@ class ParallelTranslator(LoopWorkerBase):
         self.retry_if_translation_fails = retry_if_translation_fails
         self.processing_queue = deque()
 
-    def trigger(self, translation_task: TranslationTask):
-        self.processing_queue.append(translation_task)
-        translation_task.start_time = datetime.utcnow()
+    def _trigger(self, translation_task: TranslationTask):
+        if not translation_task.start_time:
+            translation_task.start_time = datetime.utcnow()
+        translation_task.translation_failed = False
         thread = threading.Thread(target=self.llm_client.translate, args=(translation_task,))
         thread.daemon = True
         thread.start()
+    
+    def _retrigger_failed_tasks(self):
+        for task in self.processing_queue:
+            if task.translation_failed and not _is_task_timeout(task, self.timeout):
+                self._trigger(task)
+                print('Translation failed: {}'.format(task.transcribed_text))
+                time.sleep(1)
 
-    def get_results(self):
+    def _get_results(self):
         results = []
-        while self.processing_queue and (self.processing_queue[0].translated_text or datetime.utcnow() -
-                                         self.processing_queue[0].start_time > timedelta(seconds=self.timeout)):
+        while self.processing_queue and (self.processing_queue[0].translated_text or _is_task_timeout(self.processing_queue[0], self.timeout) or (self.processing_queue[0].translation_failed and not self.retry_if_translation_fails)):
             task = self.processing_queue.popleft()
-            if task.translated_text:
-                results.append(task)
-            else:
-                if self.retry_if_translation_fails:
-                    self.trigger(task)
+            if not task.translated_text:
+                if _is_task_timeout(task, self.timeout):
+                    print('Translation timeout: {}'.format(task.transcribed_text))
                 else:
-                    results.append(task)
-                    print('Translation timeout or failed: {}'.format(task.transcribed_text))
+                    print('Translation failed: {}'.format(task.transcribed_text))
+            results.append(task)
         return results
 
     def loop(self, input_queue: queue.SimpleQueue[TranslationTask], output_queue: queue.SimpleQueue[TranslationTask]):
         while True:
             if not input_queue.empty() and len(self.processing_queue) < self.PARALLEL_MAX_NUMBER:
                 task = input_queue.get()
-                self.trigger(task)
-            finished_tasks = self.get_results()
+                self.processing_queue.append(task)
+                self._trigger(task)
+            finished_tasks = self._get_results()
             for task in finished_tasks:
                 output_queue.put(task)
+            if self.retry_if_translation_fails:
+                self._retrigger_failed_tasks()
             time.sleep(0.1)
 
 
@@ -205,8 +219,10 @@ class SerialTranslator(LoopWorkerBase):
         self.timeout = timeout
         self.retry_if_translation_fails = retry_if_translation_fails
 
-    def trigger(self, translation_task: TranslationTask):
-        translation_task.start_time = datetime.utcnow()
+    def _trigger(self, translation_task: TranslationTask):
+        if not translation_task.start_time:
+            translation_task.start_time = datetime.utcnow()
+        translation_task.translation_failed = False
         thread = threading.Thread(target=self.llm_client.translate, args=(translation_task,))
         thread.daemon = True
         thread.start()
@@ -215,17 +231,20 @@ class SerialTranslator(LoopWorkerBase):
         current_task = None
         while True:
             if current_task:
-                if (current_task.translated_text or
-                        datetime.utcnow() - current_task.start_time > timedelta(seconds=self.timeout)):
+                if (current_task.translated_text or current_task.translation_failed or _is_task_timeout(current_task, self.timeout)):
                     if not current_task.translated_text:
-                        if self.retry_if_translation_fails:
-                            self.trigger(current_task)
-                            continue
-                        print('Translation timeout or failed: {}'.format(current_task.transcribed_text))
+                        if _is_task_timeout(current_task, self.timeout):
+                            print('Translation timeout: {}'.format(current_task.transcribed_text))
+                        else:
+                            print('Translation failed: {}'.format(current_task.transcribed_text))
+                            if self.retry_if_translation_fails:
+                                self._trigger(current_task)
+                                time.sleep(1)
+                                continue
                     output_queue.put(current_task)
                     current_task = None
 
             if current_task is None and not input_queue.empty():
                 current_task = input_queue.get()
-                self.trigger(current_task)
+                self._trigger(current_task)
             time.sleep(0.1)
