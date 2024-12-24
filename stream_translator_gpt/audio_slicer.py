@@ -55,6 +55,7 @@ class AudioSlicer(LoopWorkerBase):
         self.frame_duration = frame_duration
         self.counter = 0
         self.last_slice_second = 0.0
+        self.slice_count = 0
 
     def put(self, audio: np.array):
         self.counter += 1
@@ -101,5 +102,6 @@ class AudioSlicer(LoopWorkerBase):
             self.put(audio)
             if self.should_slice():
                 sliced_audio, time_range = self.slice()
-                task = TranslationTask(sliced_audio, time_range)
+                self.slice_count += 1
+                task = TranslationTask(self.slice_count, sliced_audio, time_range)
                 output_queue.put(task)

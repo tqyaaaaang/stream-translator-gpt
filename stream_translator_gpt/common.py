@@ -1,18 +1,25 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
+from enum import Enum
 
 import numpy as np
 from whisper.audio import SAMPLE_RATE
 
 
 class TranslationTask:
+    class Phase(Enum):
+        SLICED = 1
+        TRANSCRIBED = 2
+        TRANSLATED = 3
 
-    def __init__(self, audio: np.array, time_range: tuple[float, float]):
+    def __init__(self, line_id: int, audio: np.array, time_range: tuple[float, float]):
+        self.id = line_id
         self.audio = audio
         self.transcribed_text = None
         self.translated_text = None
         self.time_range = time_range
         self.start_time = None
+        self.phase = TranslationTask.Phase.SLICED
 
 
 def _auto_args(func, kwargs):

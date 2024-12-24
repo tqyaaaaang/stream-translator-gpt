@@ -53,6 +53,7 @@ class OpenaiWhisper(LoopWorkerBase):
                     print(timestamp_text + ' ' + task.transcribed_text)
                 else:
                     print(task.transcribed_text)
+            task.phase = TranslationTask.Phase.TRANSCRIBED
             output_queue.put(task)
 
 

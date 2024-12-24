@@ -198,6 +198,7 @@ class ParallelTranslator(LoopWorkerBase):
                 self.trigger(task)
             finished_tasks = self.get_results()
             for task in finished_tasks:
+                task.phase = TranslationTask.Phase.TRANSLATED
                 output_queue.put(task)
             time.sleep(0.1)
 
@@ -226,6 +227,7 @@ class SerialTranslator(LoopWorkerBase):
                             self.trigger(current_task)
                             continue
                         logger.warning('Translation timeout or failed: %s', current_task.transcribed_text)
+                    current_task.phase = TranslationTask.Phase.TRANSLATED
                     output_queue.put(current_task)
                     current_task = None
 
