@@ -85,7 +85,6 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
         with open(TEMP_AUDIO_FILE_NAME, 'rb') as audio_file:
             ApiKeyPool.use_openai_api()
             client = OpenAI(http_client=DefaultHttpxClient(proxy=self.proxy))
-            result = client.audio.transcriptions.create(model='whisper-1', file=audio_file,
-                                                             language=self.language).text
+            result = client.audio.transcriptions.create(model='whisper-1', file=audio_file, language=self.language).text
         os.remove(TEMP_AUDIO_FILE_NAME)
         return result
