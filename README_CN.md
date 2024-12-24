@@ -158,7 +158,7 @@ python3 ./stream-translator-gpt/translator.py
 | `--min_audio_length`               | 1.5                       | 切片音频的最小长度（以秒为单位）。                                                                                         |
 | `--max_audio_length`               | 15.0                      | 切片音频的最大长度（以秒为单位）。                                                                                         |
 | `--prefix_retention_length`        | 0.5                       | 在切割过程中保留前缀音频的长度。                                                                                           |
-| `--vad_threshold`                  | 0.35                      | 人声检测阈值。如果一个帧的语音概率高于此值，那么这个帧就是人声。                                                           |
+| `--vad_threshold`                  | 0.25                      | 人声检测阈值。如果一个帧的语音概率高于此值，那么这个帧就是人声。                                                           |
 | **语音转文字选项**                 |
 | `--model`                          | small                     | 选择Whisper/Faster-Whisper模型。请在[此处](https://github.com/openai/whisper#available-models-and-languages)查看可用模型。 |
 | `--language`                       | auto                      | 直播流中的语言。请在[此处](https://github.com/openai/whisper#available-models-and-languages)查看可用语言。                 |
@@ -168,8 +168,8 @@ python3 ./stream-translator-gpt/translator.py
 | `--use_whisper_api`                |                           | 设置此标志以使用OpenAI Whisper API，而不是原始本地Whipser.                                                                 |
 | `--whisper_filters`                | emoji_filter              | 应用于whisper结果的过滤器，由","分隔。我们提供 emoji_filter 和 japanese_stream_filter                                      |
 | **翻译选项**                       |
-| `--openai_api_key`                 |                           | 如果使用GPT翻译/Whisper API，需要OpenAI API密钥。                                                                          |
-| `--google_api_key`                 |                           | 如果使用Gemini翻译，需要Google API密钥。                                                                                   |
+| `--openai_api_key`                 |                           | 如果使用GPT翻译/Whisper API，需要OpenAI API密钥。如果您有多个密钥，可以用“,”分隔，每个密钥将轮流使用。                     |
+| `--google_api_key`                 |                           | 如果使用Gemini翻译，需要Google API密钥。如果您有多个密钥，可以用“,”分隔，每个密钥将轮流使用。                              |
 | `--gpt_model`                      | gpt-4o-mini               | GPT模型名称， gpt-3.5-turbo / gpt-4o / gpt-4o-mini                                                                         |
 | `--gemini_model`                   | gemini-1.5-flash          | Gemini模型名称，gemini-1.5-flash / gemini-1.5-pro                                                                          |
 | `--gpt_translation_prompt`         |                           | 如果设置了该选项，将通过GPT / Gemini API（根据填写的API密钥决定）将结果文本翻译成目标语言。例如："从日语翻译成中文"        |

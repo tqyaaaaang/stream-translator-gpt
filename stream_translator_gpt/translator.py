@@ -208,7 +208,7 @@ def cli():
                         help='The length of the retention prefix audio during slicing.')
     parser.add_argument('--vad_threshold',
                         type=float,
-                        default=0.35,
+                        default=0.25,
                         help='The threshold of Voice activity detection.'
                         'if the speech probability of a frame is higher than this value, '
                         'then this frame is speech.')
@@ -248,8 +248,10 @@ def cli():
     parser.add_argument('--openai_api_key',
                         type=str,
                         default=None,
-                        help='OpenAI API key if using GPT translation / Whisper API.')
-    parser.add_argument('--google_api_key', type=str, default=None, help='Google API key if using Gemini translation.')
+                        help='OpenAI API key if using GPT translation / Whisper API.'
+                        'If you have multiple keys, you can separate them with \",\" and each key will be used in turn.')
+    parser.add_argument('--google_api_key', type=str, default=None, help='Google API key if using Gemini translation.'
+                        'If you have multiple keys, you can separate them with \",\" and each key will be used in turn.')
     parser.add_argument('--gpt_model',
                         type=str,
                         default='gpt-4o-mini',
