@@ -404,9 +404,12 @@ def cli():
         formatter = logging.Formatter(fmt='{asctime}.{msecs:03.0f}:{levelname}:{threadName}: {message}', datefmt='%H:%M:%S', style='{')
         handler.setFormatter(formatter)
 
-        if args['verbose'] >= 2:
+        if args['verbose'] == 2:
             logger.setLevel(logging.DEBUG)
             handler.setLevel(logging.DEBUG)
+        elif args['verbose'] == 3:
+            logger.setLevel(logging.DEBUG - 1)
+            handler.setLevel(logging.DEBUG - 1)
 
         logger.addHandler(handler)
 

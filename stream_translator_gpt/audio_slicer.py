@@ -7,7 +7,7 @@ import logging
 
 import numpy as np
 
-from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, LogTime
+from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, LogTime
 
 warnings.filterwarnings('ignore')
 
@@ -64,7 +64,7 @@ class AudioSlicer(LoopWorkerBase):
 
     def put(self, audio: np.array):
         self.counter += 1
-        with LogTime('', level=logging.DEBUG) as log_time:
+        with LogTime('', level=logging.DEBUG - 1) as log_time:
             is_speech = self.vad.is_speech(audio, self.vad_threshold, self.sampling_rate)
             log_time.set_log ('slicer at block %d decided is_speech = %s', self.counter, repr(is_speech))
         if is_speech:
@@ -101,7 +101,6 @@ class AudioSlicer(LoopWorkerBase):
         # self.vad.reset_states()
         slice_second = self.counter * self.frame_duration
         last_slice_second = self.last_slice_second
-        logger.info('slicer decided to slice %.3f to %.3f', last_slice_second, slice_second)
         self.last_slice_second = slice_second
         return concatenate_audio, (last_slice_second, slice_second)
 
@@ -111,6 +110,7 @@ class AudioSlicer(LoopWorkerBase):
             self.put(audio)
             if self.should_slice():
                 sliced_audio, time_range = self.slice()
+                logger.info('slicer decided to slice %s to %s', sec2str(time_range[0]), sec2str(time_range[1]))
                 self.slice_count += 1
                 task = TranslationTask(self.slice_count, sliced_audio, time_range)
                 output_queue.put(task)
