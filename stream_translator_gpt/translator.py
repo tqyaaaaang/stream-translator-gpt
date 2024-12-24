@@ -349,7 +349,7 @@ def cli():
                         default=None,
                         help='If set, will send the result text to this Telegram chat. '
                         'Needs to be used with \"--telegram_token\".')
-    parser.add_argument('--verbose',
+    parser.add_argument('-v', '--verbose',
                         dest='verbose',
                         type=int,
                         nargs='?',
