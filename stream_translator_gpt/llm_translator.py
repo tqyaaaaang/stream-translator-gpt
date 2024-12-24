@@ -178,7 +178,7 @@ class ParallelTranslator(LoopWorkerBase):
         thread = threading.Thread(target=self.llm_client.translate, args=(translation_task,))
         thread.daemon = True
         thread.start()
-    
+
     def _retrigger_failed_tasks(self):
         for task in self.processing_queue:
             if task.translation_failed and not _is_task_timeout(task, self.timeout):
@@ -188,7 +188,9 @@ class ParallelTranslator(LoopWorkerBase):
 
     def _get_results(self):
         results = []
-        while self.processing_queue and (self.processing_queue[0].translated_text or _is_task_timeout(self.processing_queue[0], self.timeout) or (self.processing_queue[0].translation_failed and not self.retry_if_translation_fails)):
+        while self.processing_queue and (
+                self.processing_queue[0].translated_text or _is_task_timeout(self.processing_queue[0], self.timeout) or
+            (self.processing_queue[0].translation_failed and not self.retry_if_translation_fails)):
             task = self.processing_queue.popleft()
             if not task.translated_text:
                 if _is_task_timeout(task, self.timeout):
@@ -231,7 +233,8 @@ class SerialTranslator(LoopWorkerBase):
         current_task = None
         while True:
             if current_task:
-                if (current_task.translated_text or current_task.translation_failed or _is_task_timeout(current_task, self.timeout)):
+                if (current_task.translated_text or current_task.translation_failed or
+                        _is_task_timeout(current_task, self.timeout)):
                     if not current_task.translated_text:
                         if _is_task_timeout(current_task, self.timeout):
                             print('Translation timeout: {}'.format(current_task.transcribed_text))
