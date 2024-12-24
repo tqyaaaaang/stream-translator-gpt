@@ -11,7 +11,7 @@ from google.api_core.exceptions import InternalServerError, ResourceExhausted, T
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from openai import OpenAI, DefaultHttpxClient, APITimeoutError, APIConnectionError
 
-from .common import TranslationTask, LoopWorkerBase
+from .common import TranslationTask, LoopWorkerBase, ApiKeyPool
 
 
 # The double quotes in the values of JSON have not been escaped, so manual escaping is necessary.
@@ -87,6 +87,7 @@ class LLMClint():
 
     def _translate_by_gpt(self, translation_task: TranslationTask):
         # https://platform.openai.com/docs/api-reference/chat/create?lang=python
+        ApiKeyPool.use_openai_api()
         client = OpenAI(http_client=DefaultHttpxClient(proxy=self.proxy))
         system_prompt = 'You are a translation engine.'
         if self.use_json_result:
@@ -130,6 +131,7 @@ class LLMClint():
 
     def _translate_by_gemini(self, translation_task: TranslationTask):
         # https://ai.google.dev/tutorials/python_quickstart
+        ApiKeyPool.use_google_api()
         client = genai.GenerativeModel(self.model)
         messages = self._gpt_to_gemini(self.history_messages)
         user_content = '{}: \n{}'.format(self.prompt, translation_task.transcribed_text)

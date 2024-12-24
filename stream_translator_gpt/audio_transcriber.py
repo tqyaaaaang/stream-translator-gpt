@@ -6,7 +6,7 @@ import numpy as np
 from openai import OpenAI, DefaultHttpxClient
 
 from . import filters
-from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str
+from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, ApiKeyPool
 
 TEMP_AUDIO_FILE_NAME = '_whisper_api_temp.wav'
 
@@ -72,7 +72,7 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
     # https://platform.openai.com/docs/api-reference/audio/createTranscription?lang=python
 
     def __init__(self, language: str, proxy: str) -> None:
-        self.client = OpenAI(http_client=DefaultHttpxClient(proxy=proxy))
+        self.proxy = proxy
         self.language = language
 
     def __del__(self):
@@ -83,7 +83,9 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
         with open(TEMP_AUDIO_FILE_NAME, 'wb') as audio_file:
             write_audio(audio_file, SAMPLE_RATE, audio)
         with open(TEMP_AUDIO_FILE_NAME, 'rb') as audio_file:
-            result = self.client.audio.transcriptions.create(model='whisper-1', file=audio_file,
+            ApiKeyPool.use_openai_api()
+            client = OpenAI(http_client=DefaultHttpxClient(proxy=self.proxy))
+            result = client.audio.transcriptions.create(model='whisper-1', file=audio_file,
                                                              language=self.language).text
         os.remove(TEMP_AUDIO_FILE_NAME)
         return result

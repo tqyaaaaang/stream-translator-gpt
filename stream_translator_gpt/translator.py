@@ -5,9 +5,7 @@ import sys
 import threading
 import time
 
-import google.generativeai as genai
-from google.api_core.client_options import ClientOptions
-
+from .common import ApiKeyPool
 from .audio_getter import StreamAudioGetter, LocalFileAudioGetter, DeviceAudioGetter
 from .audio_slicer import AudioSlicer
 from .audio_transcriber import OpenaiWhisper, FasterWhisper, RemoteOpenaiWhisper
@@ -28,13 +26,7 @@ def main(url, format, cookies, input_proxy, device_index, device_recording_inter
          gpt_base_url, gemini_base_url, processing_proxy, use_json_result, retry_if_translation_fails,
          output_timestamps, hide_transcribe_result, output_proxy, output_file_path, cqhttp_url, cqhttp_token,
          discord_webhook_url, telegram_token, telegram_chat_id, **transcribe_options):
-    if openai_api_key:
-        os.environ['OPENAI_API_KEY'] = openai_api_key
-    if gpt_base_url:
-        os.environ['OPENAI_BASE_URL'] = gpt_base_url
-    if google_api_key:
-        gemini_client_options = ClientOptions(api_endpoint=gemini_base_url)
-        genai.configure(api_key=google_api_key, client_options=gemini_client_options, transport='rest')
+    ApiKeyPool.init(openai_api_key=openai_api_key, gpt_base_url=gpt_base_url, google_api_key=google_api_key, gemini_base_url=gemini_base_url)
 
     getter_to_slicer_queue = queue.SimpleQueue()
     slicer_to_transcriber_queue = queue.SimpleQueue()
