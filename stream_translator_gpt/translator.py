@@ -245,13 +245,18 @@ def cli():
                         default='emoji_filter',
                         help='Filters apply to whisper results, separated by ",". '
                         'We provide emoji_filter and japanese_stream_filter.')
-    parser.add_argument('--openai_api_key',
-                        type=str,
-                        default=None,
-                        help='OpenAI API key if using GPT translation / Whisper API.'
-                        'If you have multiple keys, you can separate them with \",\" and each key will be used in turn.')
-    parser.add_argument('--google_api_key', type=str, default=None, help='Google API key if using Gemini translation.'
-                        'If you have multiple keys, you can separate them with \",\" and each key will be used in turn.')
+    parser.add_argument(
+        '--openai_api_key',
+        type=str,
+        default=None,
+        help='OpenAI API key if using GPT translation / Whisper API.'
+        'If you have multiple keys, you can separate them with \",\" and each key will be used in turn.')
+    parser.add_argument(
+        '--google_api_key',
+        type=str,
+        default=None,
+        help='Google API key if using Gemini translation.'
+        'If you have multiple keys, you can separate them with \",\" and each key will be used in turn.')
     parser.add_argument('--gpt_model',
                         type=str,
                         default='gpt-4o-mini',
