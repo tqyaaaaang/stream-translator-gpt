@@ -1,6 +1,6 @@
 import os
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 
 import google.generativeai as genai
 import numpy as np
@@ -37,7 +37,7 @@ class LoopWorkerBase(ABC):
 
 
 def sec2str(second: float):
-    dt = datetime.utcfromtimestamp(second)
+    dt = datetime.fromtimestamp(second, tz=timezone.utc)
     result = dt.strftime('%H:%M:%S')
     result += ',' + str(int(second * 10 % 10))
     return result

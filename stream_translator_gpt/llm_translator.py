@@ -4,7 +4,7 @@ import threading
 import time
 import re
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import google.generativeai as genai
 from google.api_core.exceptions import InternalServerError, ResourceExhausted, TooManyRequests
@@ -50,7 +50,7 @@ def _parse_json_completion(completion):
 
 
 def _is_task_timeout(task: TranslationTask, timeout: float) -> bool:
-    return datetime.utcnow() - task.start_time > timedelta(seconds=timeout)
+    return datetime.now(timezone.utc) - task.start_time > timedelta(seconds=timeout)
 
 
 class LLMClint():
@@ -175,7 +175,7 @@ class ParallelTranslator(LoopWorkerBase):
 
     def _trigger(self, translation_task: TranslationTask):
         if not translation_task.start_time:
-            translation_task.start_time = datetime.utcnow()
+            translation_task.start_time = datetime.now(timezone.utc)
         translation_task.translation_failed = False
         thread = threading.Thread(target=self.llm_client.translate, args=(translation_task,))
         thread.daemon = True
@@ -225,7 +225,7 @@ class SerialTranslator(LoopWorkerBase):
 
     def _trigger(self, translation_task: TranslationTask):
         if not translation_task.start_time:
-            translation_task.start_time = datetime.utcnow()
+            translation_task.start_time = datetime.now(timezone.utc)
         translation_task.translation_failed = False
         thread = threading.Thread(target=self.llm_client.translate, args=(translation_task,))
         thread.daemon = True
