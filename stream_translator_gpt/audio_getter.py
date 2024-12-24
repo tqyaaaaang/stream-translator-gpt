@@ -22,6 +22,10 @@ def _transport(ytdlp_proc, ffmpeg_proc):
             ffmpeg_proc.stdin.write(chunk)
         except (BrokenPipeError, OSError):
             pass
+    if ytdlp_proc.poll():
+        logger.error('yt-dlp exit with %s', str(ytdlp_proc.poll()))
+    if ffmpeg_proc.poll():
+        logger.error('ffmpeg exit with %s', str(ffmpeg_proc.poll()))
     ytdlp_proc.kill()
     ffmpeg_proc.kill()
 
@@ -80,6 +84,7 @@ class StreamAudioGetter(LoopWorkerBase):
             if not in_bytes:
                 break
             if len(in_bytes) != self.byte_size:
+                logger.error('audio getter received a chunk of wrong size')
                 continue
             audio = np.frombuffer(in_bytes, np.int16).flatten().astype(np.float32) / 32768.0
             output_queue.put(audio)
