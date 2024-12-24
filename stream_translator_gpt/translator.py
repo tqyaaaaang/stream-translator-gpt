@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import logging
+from logging.handlers import QueueHandler, QueueListener
 
 import google.generativeai as genai
 from google.api_core.client_options import ClientOptions
@@ -393,20 +394,32 @@ def cli():
 
     if args['verbose']:
         logger.setLevel(logging.DEBUG)
-        handler = logging.StreamHandler()
+
+        log_queue = queue.Queue()
+        handler = QueueHandler(log_queue)
         handler.setLevel(logging.DEBUG)
         formatter = logging.Formatter(fmt='{asctime}.{msecs:03.0f}:{levelname}:{threadName}: {message}', datefmt='%H:%M:%S', style='{')
         handler.setFormatter(formatter)
         logger.addHandler(handler)
+
+        write_handler = logging.StreamHandler()
+        listener = QueueListener(log_queue, write_handler)
+        listener.start()
         
         main_thread = threading.current_thread()
         main_thread.name = 'main'
     else:
         logger.setLevel(logging.INFO)
-        handler = logging.StreamHandler()
+
+        log_queue = queue.Queue()
+        handler = QueueHandler(log_queue)
         handler.setLevel(logging.INFO)
         formatter = logging.Formatter(fmt='%(message)s')
         handler.setFormatter(formatter)
         logger.addHandler(handler)
+
+        write_handler = logging.StreamHandler()
+        listener = QueueListener(log_queue, write_handler)
+        listener.start()
 
     main(url, **args)
