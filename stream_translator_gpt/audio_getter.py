@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import logging
+import typing
 
 import ffmpeg
 import numpy as np
@@ -15,7 +16,7 @@ from .common import SAMPLE_RATE, LoopWorkerBase
 logger = logging.getLogger('main')
 
 
-def _transport(ytdlp_proc, ffmpeg_proc):
+def _transport(ytdlp_proc: subprocess.Popen, ffmpeg_proc: subprocess.Popen):
     while (ytdlp_proc.poll() is None) and (ffmpeg_proc.poll() is None):
         try:
             chunk = ytdlp_proc.stdout.read(1024)
@@ -30,7 +31,7 @@ def _transport(ytdlp_proc, ffmpeg_proc):
     ffmpeg_proc.kill()
 
 
-def _open_stream(url: str, format: str, cookies: str, proxy: str):
+def _open_stream(url: str, format: str, cookies: str, proxy: str) -> typing.Tuple[subprocess.Popen, subprocess.Popen]:
     cmd = ['yt-dlp', url, '-f', format, '-o', '-', '-q']
     if cookies:
         cmd.extend(['--cookies', cookies])
@@ -47,6 +48,8 @@ def _open_stream(url: str, format: str, cookies: str, proxy: str):
                                                                                                    pipe_stdout=True))
     except ffmpeg.Error as e:
         raise RuntimeError(f'Failed to load audio: {e.stderr.decode()}') from e
+    
+    logger.debug('started yt-dlp process %d and ffmpeg process %d', ytdlp_process.pid, ffmpeg_process.pid)
 
     thread = threading.Thread(target=_transport, name='yt-dlp', args=(ytdlp_process, ffmpeg_process))
     thread.start()
@@ -82,9 +85,10 @@ class StreamAudioGetter(LoopWorkerBase):
         while self.ffmpeg_process.poll() is None:
             in_bytes = self.ffmpeg_process.stdout.read(self.byte_size)
             if not in_bytes:
+                logger.error('ffmpeg process closed the output pipe')
                 break
             if len(in_bytes) != self.byte_size:
-                logger.error('audio getter received a chunk of wrong size')
+                logger.error('audio getter received a chunk of wrong size (%d expected, %d received): %x', self.byte_size, len(in_bytes), in_bytes)
                 continue
             audio = np.frombuffer(in_bytes, np.int16).flatten().astype(np.float32) / 32768.0
             output_queue.put(audio)

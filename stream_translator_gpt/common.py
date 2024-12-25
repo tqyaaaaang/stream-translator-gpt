@@ -11,6 +11,9 @@ from whisper.audio import SAMPLE_RATE
 logger = logging.getLogger('main')
 
 
+DDEBUG = logging.DEBUG - 1
+
+
 class TranslationTask:
     class Phase(Enum):
         SLICED = 1

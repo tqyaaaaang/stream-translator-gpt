@@ -7,7 +7,7 @@ import logging
 
 import numpy as np
 
-from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, LogTime
+from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, LogTime, DDEBUG
 
 warnings.filterwarnings('ignore')
 
@@ -64,7 +64,7 @@ class AudioSlicer(LoopWorkerBase):
 
     def put(self, audio: np.array):
         self.counter += 1
-        with LogTime('', level=logging.DEBUG - 1) as log_time:
+        with LogTime('', level=DDEBUG) as log_time:
             is_speech = self.vad.is_speech(audio, self.vad_threshold, self.sampling_rate)
             log_time.set_log ('slicer at block %d decided is_speech = %s', self.counter, repr(is_speech))
         if is_speech:
