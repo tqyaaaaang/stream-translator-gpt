@@ -88,7 +88,7 @@ class StreamAudioGetter(LoopWorkerBase):
                 logger.error('ffmpeg process closed the output pipe')
                 break
             if len(in_bytes) != self.byte_size:
-                logger.error('audio getter received a chunk of wrong size (%d expected, %d received): %x', self.byte_size, len(in_bytes), in_bytes)
+                logger.error(f'audio getter received a chunk of wrong size ({self.byte_size} expected, {len(in_bytes)} received): {in_bytes}')
                 continue
             audio = np.frombuffer(in_bytes, np.int16).flatten().astype(np.float32) / 32768.0
             output_queue.put(audio)
