@@ -3,7 +3,6 @@ import queue
 from scipy.io.wavfile import write as write_audio
 
 import numpy as np
-from openai import OpenAI, DefaultHttpxClient
 
 from . import filters
 from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, ApiKeyPool
@@ -24,8 +23,9 @@ def _filter_text(text: str, whisper_filters: str):
 class OpenaiWhisper(LoopWorkerBase):
 
     def __init__(self, model: str, language: str) -> None:
-        print('Loading whisper model: {}'.format(model))
         import whisper
+
+        print('Loading whisper model: {}'.format(model))
         self.model = whisper.load_model(model)
         self.language = language
 
@@ -55,8 +55,9 @@ class OpenaiWhisper(LoopWorkerBase):
 class FasterWhisper(OpenaiWhisper):
 
     def __init__(self, model: str, language: str) -> None:
-        print('Loading faster-whisper model: {}'.format(model))
         from faster_whisper import WhisperModel
+
+        print('Loading faster-whisper model: {}'.format(model))
         self.model = WhisperModel(model)
         self.language = language
 
@@ -80,6 +81,7 @@ class RemoteOpenaiWhisper(OpenaiWhisper):
             os.remove(TEMP_AUDIO_FILE_NAME)
 
     def transcribe(self, audio: np.array, **transcribe_options) -> str:
+        from openai import OpenAI, DefaultHttpxClient
         with open(TEMP_AUDIO_FILE_NAME, 'wb') as audio_file:
             write_audio(audio_file, SAMPLE_RATE, audio)
         with open(TEMP_AUDIO_FILE_NAME, 'rb') as audio_file:

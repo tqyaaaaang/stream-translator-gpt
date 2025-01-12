@@ -2,9 +2,7 @@ import os
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
-import google.generativeai as genai
 import numpy as np
-from google.api_core.client_options import ClientOptions
 from whisper.audio import SAMPLE_RATE
 
 
@@ -67,6 +65,9 @@ class ApiKeyPool():
 
     @classmethod
     def use_google_api(cls):
+        import google.generativeai as genai
+        from google.api_core.client_options import ClientOptions
+
         if not cls.google_api_key_list:
             return
         gemini_client_options = ClientOptions(api_endpoint=cls.gemini_base_url)

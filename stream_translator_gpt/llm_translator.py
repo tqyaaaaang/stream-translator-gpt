@@ -6,11 +6,6 @@ import re
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
-import google.generativeai as genai
-from google.api_core.exceptions import InternalServerError, ResourceExhausted, TooManyRequests
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
-from openai import OpenAI, DefaultHttpxClient, APITimeoutError, APIConnectionError
-
 from .common import TranslationTask, LoopWorkerBase, ApiKeyPool
 
 
@@ -87,6 +82,8 @@ class LLMClint():
 
     def _translate_by_gpt(self, translation_task: TranslationTask):
         # https://platform.openai.com/docs/api-reference/chat/create?lang=python
+        from openai import OpenAI, DefaultHttpxClient, APITimeoutError, APIConnectionError
+
         ApiKeyPool.use_openai_api()
         client = OpenAI(http_client=DefaultHttpxClient(proxy=self.proxy))
         system_prompt = 'You are a translation engine.'
@@ -96,6 +93,7 @@ class LLMClint():
         messages.extend(self.history_messages)
         user_content = '{}: \n{}'.format(self.prompt, translation_task.transcribed_text)
         messages.append({'role': 'user', 'content': user_content})
+
         try:
             completion = client.chat.completions.create(
                 model=self.model,
@@ -131,6 +129,10 @@ class LLMClint():
 
     def _translate_by_gemini(self, translation_task: TranslationTask):
         # https://ai.google.dev/tutorials/python_quickstart
+        import google.generativeai as genai
+        from google.api_core.exceptions import InternalServerError, ResourceExhausted, TooManyRequests
+        from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
         ApiKeyPool.use_google_api()
         client = genai.GenerativeModel(self.model)
         messages = self._gpt_to_gemini(self.history_messages)
@@ -143,6 +145,7 @@ class LLMClint():
             HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
+
         try:
             response = client.generate_content(messages, generation_config=config, safety_settings=safety_settings)
             translation_task.translated_text = response.text
