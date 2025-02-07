@@ -260,11 +260,11 @@ def cli():
     parser.add_argument('--gpt_model',
                         type=str,
                         default='gpt-4o-mini',
-                        help='OpenAI\'s GPT model name, gpt-3.5-turbo / gpt-4o / gpt-4o-mini.')
+                        help='OpenAI\'s GPT model name, gpt-4o / gpt-4o-mini')
     parser.add_argument('--gemini_model',
                         type=str,
-                        default='gemini-1.5-flash',
-                        help='Google\'s Gemini model name, gemini-1.5-flash / gemini-1.5-pro')
+                        default='gemini-2.0-flash',
+                        help='Google\'s Gemini model name, gemini-1.5-flash / gemini-1.5-pro / gemini-2.0-flash')
     parser.add_argument('--gpt_translation_prompt',
                         type=str,
                         default=None,

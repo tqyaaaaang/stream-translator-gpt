@@ -170,8 +170,8 @@ python3 ./stream-translator-gpt/translator.py
 | **翻译选项**                       |
 | `--openai_api_key`                 |                           | 如果使用GPT翻译/Whisper API，需要OpenAI API密钥。如果您有多个密钥，可以用“,”分隔，每个密钥将轮流使用。                     |
 | `--google_api_key`                 |                           | 如果使用Gemini翻译，需要Google API密钥。如果您有多个密钥，可以用“,”分隔，每个密钥将轮流使用。                              |
-| `--gpt_model`                      | gpt-4o-mini               | GPT模型名称， gpt-3.5-turbo / gpt-4o / gpt-4o-mini                                                                         |
-| `--gemini_model`                   | gemini-1.5-flash          | Gemini模型名称，gemini-1.5-flash / gemini-1.5-pro                                                                          |
+| `--gpt_model`                      | gpt-4o-mini               | GPT模型名称， gpt-4o / gpt-4o-mini                                                                                         |
+| `--gemini_model`                   | gemini-2.0-flash          | Gemini模型名称，gemini-1.5-flash / gemini-1.5-pro / gemini-2.0-flash                                                       |
 | `--gpt_translation_prompt`         |                           | 如果设置了该选项，将通过GPT / Gemini API（根据填写的API密钥决定）将结果文本翻译成目标语言。例如："从日语翻译成中文"        |
 | `--gpt_translation_history_size`   | 0                         | 调用GPT / Gemini API时发送的先前消息数量。如果历史记录大小为0，则会并行运行翻译。如果历史记录大小> 0，则会串行运行翻译。   |
 | `--gpt_translation_timeout`        | 10                        | 如果GPT / Gemini的翻译超过这个秒数，那么该次的翻译将被丢弃。                                                               |

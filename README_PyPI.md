@@ -14,7 +14,7 @@ Try it on Colab: [![Open In Colab](https://colab.research.google.com/assets/cola
 
 1. Python >= 3.8 (Recommend >= 3.10)
 2. [**Install CUDA on your system.**](https://developer.nvidia.com/cuda-downloads).
-3. [**Install cuDNN v8 to your CUDA dir**](https://developer.nvidia.com/rdp/cudnn-archive) if you want to use **Faster-Whisper**.
+3. [**Install cuDNN to your CUDA dir**](https://developer.nvidia.com/cudnn-downloads) if you want to use **Faster-Whisper**.
 4. [**Install PyTorch (with CUDA) to your Python.**](https://pytorch.org/get-started/locally/)
 5. [**Create a Google API key**](https://aistudio.google.com/app/apikey) if you want to use **Gemini API** for translation. (Free 15 requests / minute)
 6. [**Create a OpenAI API key**](https://platform.openai.com/api-keys) if you want to use **Whisper API** for transcription or **GPT API** for translation.
@@ -49,7 +49,7 @@ python3 ./stream-translator-gpt/translator.py
 
     ```stream-translator-gpt {URL} --model large --language {input_language}```
 
-- Transcribe by **Faster-Whisper**:
+- Transcribe by **Faster Whisper**:
 
     ```stream-translator-gpt {URL} --model large --language {input_language} --use_faster_whisper```
 
