@@ -141,8 +141,9 @@ class DeviceAudioGetter(LoopWorkerBase):
     def __init__(self, device_index: int, frame_duration: float, recording_interval: float, multiplier: float) -> None:
         import sounddevice as sd
         if device_index:
-            sd.default.device[0] = device_index
-        sd.default.dtype[0] = np.float32
+            self.device_index = device_index
+        else:
+            self.device_index = sd.default.device[0]
         self.frame_duration = frame_duration
         self.recording_frame_num = max(1, round(recording_interval / frame_duration))
         logger.warning('Recording device: %s', sd.query_devices(sd.default.device[0])['name'])
@@ -153,28 +154,37 @@ class DeviceAudioGetter(LoopWorkerBase):
         volumeFactor = multiplier
         self.multiplier = pow(2, (math.sqrt(math.sqrt(math.sqrt(volumeFactor))) * 192 - 192)/6)
         logger.warning('Recording multiplier: %f', self.multiplier)
+        self.recording_queue: queue.SimpleQueue[np.array] = queue.SimpleQueue()
 
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
         import sounddevice as sd
-        while True:
-            audio = sd.rec(frames=round(SAMPLE_RATE * self.frame_duration * self.recording_frame_num),
-                           samplerate=SAMPLE_RATE,
-                           channels=self.channels,
-                           blocking=True)
-            logger.debug('record audio clip of shape %s, preview %s', str(audio.shape), str(audio))
-            audio *= self.multiplier
-            flat_audio = audio.flatten()
-            if self.debug_count != -1:
-                self.count += 1
-                self.audio_clip = np.append(self.audio_clip, audio)
-                if self.count == self.debug_count:
-                    normalized_clip = np.int16(self.audio_clip * 2 ** 15)
-                    clip = pydub.AudioSegment(normalized_clip.tobytes(), frame_rate=SAMPLE_RATE, sample_width=2, channels=self.channels)
-                    clip.export(str(time.time()) + '.mp3', format='mp3', bitrate='320k')
-                    logger.warning('export clip.')
-                    self.count = 0
-                    self.audio_clip = np.array([])
-            split_audios = np.array_split(flat_audio, self.recording_frame_num)
-            for split_audio in split_audios:
-                output_queue.put(split_audio)
+        def recording_callback(indata: np.ndarray, frames: int, time, status) -> None:
+            if status:
+                logger.warning('Audio recorder returned status=%s', str(status))
+            else:
+                self.recording_queue.put_nowait(indata)
+        with sd.InputStream(blocksize=round(SAMPLE_RATE * self.frame_duration * self.recording_frame_num),
+                            samplerate=SAMPLE_RATE,
+                            channels=self.channels,
+                            device=self.device_index,
+                            dtype=np.float32,
+                            callback=recording_callback):
+            while True:
+                audio = self.recording_queue.get()
+                logger.debug('record audio clip of shape %s, preview %s', str(audio.shape), str(audio))
+                audio *= self.multiplier
+                flat_audio = audio.flatten()
+                if self.debug_count != -1:
+                    self.count += 1
+                    self.audio_clip = np.append(self.audio_clip, audio)
+                    if self.count == self.debug_count:
+                        normalized_clip = np.int16(self.audio_clip * 2 ** 15)
+                        clip = pydub.AudioSegment(normalized_clip.tobytes(), frame_rate=SAMPLE_RATE, sample_width=2, channels=self.channels)
+                        clip.export(str(time.time()) + '.mp3', format='mp3', bitrate='320k')
+                        logger.warning('export clip.')
+                        self.count = 0
+                        self.audio_clip = np.array([])
+                split_audios = np.array_split(flat_audio, self.recording_frame_num)
+                for split_audio in split_audios:
+                    output_queue.put(split_audio)
