@@ -26,7 +26,7 @@ def _start_daemon_thread(func, name, *args, **kwargs):
     thread.start()
 
 
-def main(url, format, cookies, input_proxy, is_file, device_index, device_recording_interval, frame_duration,
+def main(url, format, cookies, input_proxy, is_file, device_index, device_recording_interval, device_multiplier, frame_duration,
          continuous_no_speech_threshold, min_audio_length, max_audio_length, prefix_retention_length, vad_threshold,
          model, language, use_faster_whisper, use_whisper_api, whisper_base_url, whisper_api_key, whisper_filters, openai_api_key, google_api_key,
          gpt_translation_prompt, gpt_translation_history_size, gpt_model, gemini_model, gpt_translation_timeout,
@@ -152,6 +152,7 @@ def main(url, format, cookies, input_proxy, is_file, device_index, device_record
             device_index=device_index,
             frame_duration=frame_duration,
             recording_interval=device_recording_interval,
+            multiplier=device_multiplier,
             output_queue=getter_to_slicer_queue,
         )
     elif is_file or os.path.isabs(url):
@@ -215,6 +216,10 @@ def cli():
                         help='The shorter the recording interval, the lower the latency,'
                         'but it will increase CPU usage.'
                         'It is recommended to set it between 0.1 and 1.0.')
+    parser.add_argument('--device_multiplier',
+                        type=float,
+                        default=1,
+                        help='Amplitude multiplier for device input.')
     parser.add_argument('--frame_duration',
                         type=float,
                         default=0.1,

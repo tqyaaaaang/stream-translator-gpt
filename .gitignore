@@ -130,3 +130,6 @@ dmypy.json
 
 --Frag*
 *.wav
+
+.*_key
+run*.sh
