@@ -148,9 +148,6 @@ class DeviceAudioGetter(LoopWorkerBase):
         self.recording_frame_num = max(1, round(recording_interval / frame_duration))
         logger.warning('Recording device: %s', sd.query_devices(sd.default.device[0])['name'])
         self.channels = 1
-        self.debug_count = -1
-        self.count = 0
-        self.audio_clip = np.array([])
         volumeFactor = multiplier
         self.multiplier = pow(2, (math.sqrt(math.sqrt(math.sqrt(volumeFactor))) * 192 - 192)/6)
         logger.warning('Recording multiplier: %f', self.multiplier)
@@ -175,16 +172,6 @@ class DeviceAudioGetter(LoopWorkerBase):
                 logger.debug('record audio clip of shape %s, preview %s', str(audio.shape), str(audio))
                 audio *= self.multiplier
                 flat_audio = audio.flatten()
-                if self.debug_count != -1:
-                    self.count += 1
-                    self.audio_clip = np.append(self.audio_clip, audio)
-                    if self.count == self.debug_count:
-                        normalized_clip = np.int16(self.audio_clip * 2 ** 15)
-                        clip = pydub.AudioSegment(normalized_clip.tobytes(), frame_rate=SAMPLE_RATE, sample_width=2, channels=self.channels)
-                        clip.export(str(time.time()) + '.mp3', format='mp3', bitrate='320k')
-                        logger.warning('export clip.')
-                        self.count = 0
-                        self.audio_clip = np.array([])
                 split_audios = np.array_split(flat_audio, self.recording_frame_num)
                 for split_audio in split_audios:
                     output_queue.put(split_audio)
