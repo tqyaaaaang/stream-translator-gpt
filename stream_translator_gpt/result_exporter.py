@@ -17,10 +17,8 @@ def _log_http_status(channel: str, status_code: int):
 
 
 def _format_translation_result(task: TranslationTask) -> str:
-    """Render context-mode results distinctly without changing normal output."""
-    if task.translation_context is None:
-        return task.translation
-    return f'[Translation]\n{task.translation}\n[Context]\n{task.translation_context}'
+    """Keep rolling translation context internal and export only the current translation."""
+    return task.translation
 
 
 class ResultExporter(LoopWorkerBase):

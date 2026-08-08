@@ -19,7 +19,7 @@ from stream_translator_gpt.llm_translator import (
     _parse_translation_context_completion,
 )
 from stream_translator_gpt.main import Config, _validate_and_normalize
-from stream_translator_gpt.result_exporter import _format_translation_result
+from stream_translator_gpt.result_exporter import ResultExporter, _format_translation_result
 
 
 class _ContextTranslator(LLMTranslator):
@@ -470,18 +470,50 @@ class TranslationContextTest(unittest.TestCase):
         self.assertEqual(task.translation, '译文')
         self.assertEqual(task.translation_context, '摘要')
 
-    def test_export_format_contains_distinct_translation_and_context_sections(self):
+    def test_export_format_keeps_translation_context_internal(self):
         task = self._task()
         task.translation = '译文'
         task.translation_context = '摘要'
 
-        self.assertEqual(
-            _format_translation_result(task),
-            '[Translation]\n译文\n[Context]\n摘要',
-        )
+        self.assertEqual(_format_translation_result(task), '译文')
 
         task.translation_context = None
         self.assertEqual(_format_translation_result(task), '译文')
+
+    def test_all_exporter_payloads_omit_internal_translation_context(self):
+        for include_transcript in (False, True):
+            for include_timestamp in (False, True):
+                with self.subTest(include_transcript=include_transcript, include_timestamp=include_timestamp):
+                    exporter = ResultExporter('', '', '', '', 0, '', '',
+                                              include_transcript, include_timestamp)
+                    exporter.cqhttp_queue = queue.SimpleQueue()
+                    exporter.discord_queue = queue.SimpleQueue()
+                    exporter.telegram_queue = queue.SimpleQueue()
+                    exporter.file_queue = queue.SimpleQueue()
+
+                    task = self._task()
+                    task.transcript = '原文'
+                    task.translation = '译文'
+                    task.translation_context = 'INTERNAL_CONTEXT_SENTINEL'
+                    input_queue = queue.SimpleQueue()
+                    input_queue.put(task)
+                    input_queue.put(None)
+
+                    with mock.patch('stream_translator_gpt.result_exporter.write_console_utf8') as console_write:
+                        exporter.loop(input_queue)
+
+                    console_payload = console_write.call_args.args[0]
+                    self.assertIn('译文', console_payload)
+                    self.assertNotIn('INTERNAL_CONTEXT_SENTINEL', console_payload)
+                    self.assertNotIn('[Context]', console_payload)
+
+                    for output_queue in (exporter.cqhttp_queue, exporter.discord_queue,
+                                         exporter.telegram_queue, exporter.file_queue):
+                        payload = output_queue.get_nowait()
+                        self.assertIn('译文', payload)
+                        self.assertNotIn('INTERNAL_CONTEXT_SENTINEL', payload)
+                        self.assertNotIn('[Context]', payload)
+                        self.assertIsNone(output_queue.get_nowait())
 
 
 if __name__ == '__main__':

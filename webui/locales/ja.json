@@ -81,7 +81,7 @@
     "gemini_base_url_ph": "https://generativelanguage.googleapis.com",
     "history_size": "履歴サイズ",
     "use_translation_context": "翻訳ローリングコンテキスト",
-    "use_translation_context_info": "現在の翻訳と、100 Unicode文字以内の長期的な Context を返します。直近の生の Reference を言い換えるのではなく、より広い話題、活動、登場主体、未解決の状態を保持します。",
+    "use_translation_context_info": "直近の生の Reference を越える長期的な Context を内部で100 Unicode文字以内に維持します。ローリング Context 自体は表示・出力せず、既存の任意の原文・タイムスタンプ出力は変わりません。",
     "timeout": "タイムアウト (秒)",
     "use_json_result": "JSON 結果を使用",
     "retry_on_failure": "失敗時に再試行",

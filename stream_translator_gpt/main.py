@@ -222,8 +222,9 @@ class Config:
     context (set to 0) for weaker models."""
 
     use_translation_context: bool = False
-    """Maintain a rolling LLM-generated summary and return it alongside each translation. When enabled, translation
-    requests are processed sequentially so every request can use the preceding request's context."""
+    """Maintain an internal rolling LLM-generated summary. When enabled, translation requests are processed
+    sequentially so every request can use the preceding request's context; the rolling context itself is not
+    exported."""
 
     translation_timeout: int = 10
     """If the GPT / Gemini translation exceeds this number of seconds, the translation will be discarded."""
