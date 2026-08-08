@@ -27,10 +27,15 @@ logger = logging.getLogger('main')
 class _RealtimeAudioPacer:
     """Pace decoded samples against an absolute monotonic media timeline."""
 
-    def __init__(self, stop_event: threading.Event, clock=None, max_lag: float = 0.1) -> None:
+    def __init__(self,
+                 stop_event: threading.Event,
+                 clock=None,
+                 max_lag: float = 0.1,
+                 source_description: str = 'local file playback') -> None:
         self.stop_event = stop_event
         self.clock = clock or time.monotonic
         self.max_lag = max_lag
+        self.source_description = source_description
         self.started_at = self.clock()
         self.samples_emitted = 0
 
@@ -44,7 +49,8 @@ class _RealtimeAudioPacer:
         if lag > self.max_lag:
             self.started_at += lag
             deadline = now
-            logger.warning('Realtime local file playback fell %.3fs behind; resuming without a catch-up burst', lag)
+            logger.warning('Realtime %s fell %.3fs behind; resuming without a catch-up burst',
+                           self.source_description, lag)
         while (delay := deadline - self.clock()) > 0:
             if self.stop_event.wait(delay):
                 return False
@@ -182,15 +188,18 @@ def _open_stream(url: str, format: str, cookies: str, proxy: str, cwd: str):
 
 class StreamAudioGetter(LoopWorkerBase):
 
-    def __init__(self, url: str, format: str, cookies: str, proxy: str) -> None:
+    def __init__(self, url: str, format: str, cookies: str, proxy: str, realtime: bool = False) -> None:
         self.url = url
         self.format = format
         self.cookies = cookies
         self.proxy = proxy
+        self.realtime = realtime
         self.temp_dir = tempfile.mkdtemp()
         self.ffmpeg_process = None
         self.ytdlp_process = None
         self.transport_thread = None
+        self.stop_event = threading.Event()
+        self.pacer = None
         self.byte_size = round(SAMPLES_PER_FRAME * 4)  # Factor 4 comes from float32 (4 bytes per sample)
 
     def __del__(self):
@@ -199,6 +208,7 @@ class StreamAudioGetter(LoopWorkerBase):
 
     def _exit_handler(self, signum, frame):
         logger.info('Stopping stream audio getter after signal %s', signum)
+        self.stop_event.set()
         if self.ffmpeg_process:
             self.ffmpeg_process.kill()
         if self.ytdlp_process:
@@ -211,7 +221,13 @@ class StreamAudioGetter(LoopWorkerBase):
         logger.warning('Opening stream: %s', redact_url(self.url))
         self.ffmpeg_process, self.ytdlp_process, self.transport_thread = _open_stream(
             self.url, self.format, self.cookies, self.proxy, self.temp_dir)
-        _read_ffmpeg_loop(self.ffmpeg_process, self.byte_size, output_queue, source_name='stream ffmpeg')
+        if self.realtime:
+            self.pacer = _RealtimeAudioPacer(self.stop_event, source_description='stream playback')
+        _read_ffmpeg_loop(self.ffmpeg_process,
+                          self.byte_size,
+                          output_queue,
+                          source_name='stream ffmpeg',
+                          pacer=self.pacer)
         _wait_for_process(self.ffmpeg_process, 'ffmpeg')
         self.transport_thread.join(timeout=5)
         if self.transport_thread.is_alive():

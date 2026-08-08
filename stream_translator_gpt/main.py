@@ -327,6 +327,7 @@ def _create_audio_getter(config: Config):
             format=config.format,
             cookies=config.cookies,
             proxy=config.input_proxy,
+            realtime=config.use_modulate_transcription_api,
         )
     logger.debug('Selected local file audio input in %s mode', config.local_file_mode)
     return LocalFileAudioGetter(file_path=config.url, realtime=config.local_file_mode == 'realtime')
