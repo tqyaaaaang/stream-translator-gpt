@@ -1,4 +1,8 @@
+import logging
 import re
+
+
+logger = logging.getLogger('main')
 
 # Common Whisper silence/noise hallucinations, mostly derived from video outro
 # subtitles present in the training data.
@@ -33,11 +37,11 @@ def english_filter(text: str):
     clean_text = text.strip(" .,!?!~\t\n\r").lower()
 
     if any(keyword in clean_text for keyword in HALLUCINATION_KEYWORDS):
-        print('filter', text)
+        logger.warning('filter %s', text)
         return ''
 
     if clean_text in HALLUCINATION_SENTENCES or len(clean_text) < 3:
-        print('filter', text)
+        logger.warning('filter %s', text)
         return ''
 
     return text

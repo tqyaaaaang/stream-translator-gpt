@@ -2,6 +2,7 @@
 import argparse
 import atexit
 import json
+import logging
 import os
 import re
 import shlex
@@ -16,6 +17,12 @@ import platformdirs
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from stream_translator_gpt import __version__
+from stream_translator_gpt.logging_utils import (configure_logging, normalize_verbosity_args, redact_command,
+                                                 shutdown_logging, verbosity_from_argv)
+
+
+logger = logging.getLogger('main')
+configure_logging(verbosity_from_argv(sys.argv[1:]))
 
 
 class I18n:
@@ -35,8 +42,8 @@ class I18n:
             try:
                 with open(en_path, "r", encoding="utf-8") as f:
                     self.fallback_data = json.load(f)
-            except Exception as e:
-                print(f"Error loading fallback locale en: {e}")
+            except Exception:
+                logger.exception("Error loading fallback locale en")
 
         # Load target language if not English
         if self.lang_code != "en":
@@ -45,10 +52,10 @@ class I18n:
                 try:
                     with open(locale_path, "r", encoding="utf-8") as f:
                         self.locale_data = json.load(f)
-                except Exception as e:
-                    print(f"Error loading locale {self.lang_code}: {e}")
+                except Exception:
+                    logger.exception("Error loading locale %s", self.lang_code)
             else:
-                print(f"Locale file not found: {locale_path}")
+                logger.warning("Locale file not found: %s", locale_path)
         else:
             self.locale_data = self.fallback_data
 
@@ -60,7 +67,7 @@ class I18n:
         if key in self.fallback_data:
             return self.fallback_data[key]
         # Not found in any locale
-        print(f"Missing i18n key: {key}")
+        logger.warning("Missing i18n key: %s", key)
         return ""
 
 
@@ -119,17 +126,17 @@ def load_preset_data(preset_name):
         return None
     try:
         if preset_name == "default":
-            print(f"Loading bundled preset from: {BUNDLED_DEFAULT_PATH}")
+            logger.info("Loading bundled preset from: %s", BUNDLED_DEFAULT_PATH)
             with open(BUNDLED_DEFAULT_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
         else:
             filename = preset_name if preset_name.endswith(".json") else preset_name + ".json"
             path = os.path.join(USER_PRESETS_DIR, filename)
-            print(f"Loading user preset from: {path}")
+            logger.info("Loading user preset from: %s", path)
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-    except Exception as e:
-        print(f"Error loading preset: {e}")
+    except Exception:
+        logger.exception("Error loading preset: %s", preset_name)
         return None
 
 
@@ -143,8 +150,8 @@ def load_settings():
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"Error loading settings: {e}")
+        except Exception:
+            logger.exception("Error loading settings from: %s", SETTINGS_FILE)
     return {}
 
 
@@ -153,8 +160,8 @@ def save_settings(data):
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving settings: {e}")
+    except Exception:
+        logger.exception("Error saving settings to: %s", SETTINGS_FILE)
 
 
 SYSTEM_SETTINGS = load_settings()
@@ -197,11 +204,12 @@ def save_preset_data(preset_name, data):
     filename = preset_name if preset_name.endswith(".json") else preset_name + ".json"
     path = os.path.join(USER_PRESETS_DIR, filename)
     try:
-        print(f"Saving preset to: {path}")
+        logger.info("Saving preset to: %s", path)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
         return True
     except Exception:
+        logger.exception("Error saving preset to: %s", path)
         return False
 
 
@@ -212,25 +220,27 @@ def delete_preset_data(preset_name):
     if preset_name == "default" or preset_name == "default.json":
         return False  # Cannot delete bundled default
     filename = preset_name if preset_name.endswith(".json") else preset_name + ".json"
+    path = os.path.join(USER_PRESETS_DIR, filename)
     try:
-        path = os.path.join(USER_PRESETS_DIR, filename)
         if os.path.exists(path):
-            print(f"Deleting preset: {path}")
+            logger.info("Deleting preset: %s", path)
             os.remove(path)
             return True
         return False
     except Exception:
+        logger.exception("Error deleting preset: %s", path)
         return False
 
 
 def cleanup():
     global process, is_running
     if process and process.poll() is None:
-        print("Terminating subprocess...")
+        logger.info("Terminating translator subprocess")
         process.terminate()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            logger.warning("Translator subprocess did not exit after 5 seconds; killing it")
             process.kill()
     is_running = False
 
@@ -239,6 +249,7 @@ atexit.register(cleanup)
 
 
 def signal_handler(sig, frame):
+    logger.info("Received signal %s; shutting down WebUI", sig)
     cleanup()
     sys.exit(0)
 
@@ -544,6 +555,7 @@ def run_translator(
     global process, is_running
 
     if is_running:
+        logger.warning("Translator subprocess is already running")
         yield "Process is already running. Please stop it first.\n"
         return
 
@@ -621,11 +633,12 @@ def run_translator(
         return
     # Start Process
     is_running = True
-    start_msg = f"Running command: {subprocess.list2cmdline(cmd)}\n\n"
+    start_msg = f"Running command: {subprocess.list2cmdline(redact_command(cmd))}\n\n"
     log_history = [start_msg]
     yield start_msg
 
     try:
+        logger.info("Starting translator subprocess")
         process = subprocess.Popen(cmd,
                                    stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT,
@@ -633,6 +646,7 @@ def run_translator(
                                    bufsize=1,
                                    env=get_subprocess_env(),
                                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+        logger.info("Translator subprocess started with PID %s", process.pid)
 
         # Read output in a non-blocking way for the generator
         while True:
@@ -646,10 +660,15 @@ def run_translator(
                 yield "".join(log_history)
 
         rc = process.poll()
+        if rc == 0:
+            logger.info("Translator subprocess exited successfully")
+        else:
+            logger.error("Translator subprocess exited with return code %s", rc)
         log_history.append(f"\nProcess exited with return code {rc}\n")
         yield "".join(log_history)
 
     except Exception as e:
+        logger.exception("Translator subprocess failed")
         yield f"\nException occurred: {str(e)}\n"
     finally:
         is_running = False
@@ -659,6 +678,7 @@ def run_translator(
 def stop_translator():
     global process, is_running
     if process and is_running:
+        logger.info("Sending termination signal to translator subprocess PID %s", process.pid)
         process.terminate()
         # On Windows terminate might not look nice for console apps, but this is a python script
         return "Sending termination signal..."
@@ -676,12 +696,16 @@ def run_list_formats(url, cookies, input_proxy):
         cmd.extend(["--input-proxy", input_proxy])
 
     try:
+        logger.info("Listing available stream formats")
         # This might take a while, so UI might freeze slightly, but it's okay for a button click
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=get_subprocess_env())
+        logger.info("Finished listing available stream formats")
         return result.stdout
     except subprocess.CalledProcessError as e:
+        logger.error("Failed to list stream formats; subprocess returned %s", e.returncode)
         return f"Error listing formats:\n{e.stderr}"
     except Exception as e:
+        logger.exception("Failed to list stream formats")
         return f"Error: {str(e)}"
 
 
@@ -1015,11 +1039,15 @@ with gr.Blocks() as demo:
             return gr.update(value=current_ui_lang)
         SYSTEM_SETTINGS["ui_language"] = lang
         save_settings(SYSTEM_SETTINGS)
-        print(f"Language changed to {lang}. Exiting...")
+        logger.info("Language changed to %s; exiting WebUI", lang)
 
         def kill():
             time.sleep(0.5)
-            os._exit(0)
+            try:
+                cleanup()
+            finally:
+                shutdown_logging()
+                os._exit(0)
 
         threading.Thread(target=kill).start()
         return gr.update(value=lang)
@@ -1206,14 +1234,32 @@ with gr.Blocks() as demo:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Stream Translator GPT WebUI")
-    parser.add_argument("--share", action="store_true", help="Create a public link to your interface (for Colab etc.)")
-    parser.add_argument("--ui-language",
-                        choices=UI_LANGUAGE_CHOICES,
-                        help="Set the WebUI interface language for this startup (en, zh, ja)")
-    args = parser.parse_args()
+    configure_logging(verbosity_from_argv(sys.argv[1:]))
+    try:
+        parser = argparse.ArgumentParser(description="Stream Translator GPT WebUI")
+        parser.add_argument("--share",
+                            action="store_true",
+                            help="Create a public link to your interface (for Colab etc.)")
+        parser.add_argument("--ui-language",
+                            choices=UI_LANGUAGE_CHOICES,
+                            help="Set the WebUI interface language for this startup (en, zh, ja)")
+        parser.add_argument('-v',
+                            '--verbose',
+                            action='count',
+                            default=0,
+                            help='Increase log verbosity; repeat up to three times')
+        args = parser.parse_args(normalize_verbosity_args(sys.argv[1:]))
 
-    demo.queue().launch(inbrowser=True, share=args.share)
+        configure_logging(args.verbose)
+
+        logger.info("Starting Stream Translator GPT WebUI")
+        demo.queue().launch(inbrowser=True, share=args.share)
+    finally:
+        logger.info("Shutting down Stream Translator GPT WebUI")
+        try:
+            cleanup()
+        finally:
+            shutdown_logging()
 
 
 if __name__ == "__main__":

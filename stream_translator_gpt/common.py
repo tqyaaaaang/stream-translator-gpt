@@ -1,4 +1,5 @@
 import ipaddress
+import logging
 import os
 import re
 import threading
@@ -14,15 +15,10 @@ SAMPLE_RATE = 16000
 SAMPLES_PER_FRAME = 512  # Requested by silero-vad >= v5
 FRAME_DURATION = SAMPLES_PER_FRAME / SAMPLE_RATE
 
-RED = '\033[91m'
-YELLOW = '\033[93m'
-GREEN = "\033[32m"
 BOLD = '\033[1m'
 ENDC = '\033[0m'
 
-INFO = f'{GREEN}[INFO]{ENDC} '
-WARNING = f'{YELLOW}[WARNING]{ENDC} '
-ERROR = f'{RED}[ERROR]{ENDC} '
+logger = logging.getLogger('main')
 
 
 class TranslationTask:
@@ -44,18 +40,21 @@ class LoopWorkerBase(ABC):
         pass
 
 
-def start_daemon_thread(func, *args, **kwargs):
+def start_daemon_thread(func, *args, name=None, **kwargs):
 
     def wrapper():
+        logger.debug('Worker started: %s', threading.current_thread().name)
         try:
             func(*args, **kwargs)
         except Exception:
+            logger.exception('Unhandled exception in worker: %s', threading.current_thread().name)
             output_queue = kwargs.get('output_queue', None)
             if output_queue is not None:
                 output_queue.put(None)
-            raise
+        finally:
+            logger.debug('Worker stopped: %s', threading.current_thread().name)
 
-    thread = threading.Thread(target=wrapper)
+    thread = threading.Thread(target=wrapper, name=name or getattr(func, '__name__', 'worker'))
     thread.daemon = True
     thread.start()
     return thread
@@ -80,13 +79,20 @@ def is_ip_host(url: str):
 
 class ClientPool:
     verify_ssl = True
+    _openai_clients = []
+    _openai_index = 0
+    _openai_lock = threading.Lock()
+    _google_clients = []
+    _google_index = 0
+    _google_lock = threading.Lock()
 
     @classmethod
     def _should_verify_ssl(cls, base_url):
         if not cls.verify_ssl:
             return False
         if is_ip_host(base_url):
-            print(f'{WARNING}Base URL "{base_url}" uses a bare IP, disabling TLS certificate verification for it.')
+            logger.warning('Base URL host "%s" is a bare IP; disabling TLS certificate verification for it.',
+                           urlparse(base_url).hostname)
             return False
         return True
 
@@ -115,6 +121,8 @@ class ClientPool:
                     http_client=httpx.Client(proxy=proxy, verify=verify),
                 )
                 cls._openai_clients.append(client)
+            logger.info('Initialized OpenAI client pool with %d client(s); custom endpoint=%s, proxy=%s, verify_ssl=%s',
+                        len(cls._openai_clients), bool(openai_base_url), bool(proxy), verify)
 
         cls._google_clients = []
         cls._google_index = 0
@@ -129,21 +137,44 @@ class ClientPool:
                 key = key.strip()
                 client = genai.Client(api_key=key, http_options=http_options)
                 cls._google_clients.append(client)
+            logger.info('Initialized Google client pool with %d client(s); custom endpoint=%s, proxy=%s, verify_ssl=%s',
+                        len(cls._google_clients), bool(google_base_url), bool(proxy),
+                        http_options['client_args']['verify'])
 
     @classmethod
     def get_openai_client(cls):
-        if not cls._openai_clients:
+        with cls._openai_lock:
+            if not cls._openai_clients:
+                client = None
+                index = None
+                client_count = 0
+            else:
+                index = cls._openai_index
+                client_count = len(cls._openai_clients)
+                client = cls._openai_clients[index]
+                cls._openai_index = (index + 1) % client_count
+        if client is None:
+            logger.error('OpenAI client pool is empty')
             return None
-        client = cls._openai_clients[cls._openai_index]
-        cls._openai_index = (cls._openai_index + 1) % len(cls._openai_clients)
+        logger.debug('Using OpenAI client %d of %d', index + 1, client_count)
         return client
 
     @classmethod
     def get_google_client(cls):
-        if not cls._google_clients:
+        with cls._google_lock:
+            if not cls._google_clients:
+                client = None
+                index = None
+                client_count = 0
+            else:
+                index = cls._google_index
+                client_count = len(cls._google_clients)
+                client = cls._google_clients[index]
+                cls._google_index = (index + 1) % client_count
+        if client is None:
+            logger.error('Google client pool is empty')
             return None
-        client = cls._google_clients[cls._google_index]
-        cls._google_index = (cls._google_index + 1) % len(cls._google_clients)
+        logger.debug('Using Google client %d of %d', index + 1, client_count)
         return client
 
 

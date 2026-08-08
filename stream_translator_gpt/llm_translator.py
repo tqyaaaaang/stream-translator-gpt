@@ -1,4 +1,5 @@
 import json
+import logging
 import queue
 import re
 import threading
@@ -7,7 +8,10 @@ from abc import abstractmethod
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
-from .common import TranslationTask, LoopWorkerBase, ClientPool, INFO
+from .common import TranslationTask, LoopWorkerBase, ClientPool
+
+
+logger = logging.getLogger('main')
 
 
 # The double quotes in the values of JSON have not been escaped, so manual escaping is necessary.
@@ -42,6 +46,7 @@ def _parse_json_completion(completion):
             return completion
         return translate_text
     except json.JSONDecodeError:
+        logger.debug('Failed to parse the translation response as JSON', exc_info=True)
         return completion
 
 
@@ -62,7 +67,7 @@ class LLMTranslator(LoopWorkerBase):
                  timeout: int,
                  retry_if_translation_fails: bool,
                  debug_mode: bool = False) -> None:
-        print(f'{INFO}Using {model} API as translation engine.')
+        logger.warning('Using %s API as translation engine.', model)
         self.model = model
         self.prompt = prompt
         self.history_size = history_size
@@ -101,6 +106,7 @@ class LLMTranslator(LoopWorkerBase):
             return translation
         lines = [l.strip() for l in translation.strip().split('\n') if l.strip()]
         if len(lines) > 1:
+            logger.debug('Translation response contained multiple lines; using the final non-empty line')
             return lines[-1]
         return translation
 
@@ -112,12 +118,13 @@ class LLMTranslator(LoopWorkerBase):
         if self.recent_transcripts is not None:
             task.context_transcripts = list(self.recent_transcripts)
             self.recent_transcripts.append(task.transcript)
+            logger.debug('Prepared translation context with %d prior transcript(s)', len(task.context_transcripts))
 
     def _trigger(self, translation_task: TranslationTask):
         if not translation_task.start_time:
             translation_task.start_time = datetime.now(timezone.utc)
         translation_task.translation_failed = False
-        thread = threading.Thread(target=self.translate, args=(translation_task,))
+        thread = threading.Thread(target=self.translate, name='translator-instance', args=(translation_task,))
         thread.daemon = True
         thread.start()
 
@@ -132,7 +139,7 @@ class LLMTranslator(LoopWorkerBase):
                 backoff = min(2**task.retry_count, 30)
                 task.next_retry_time = now + timedelta(seconds=backoff)
                 self._trigger(task)
-                print(f'Translation failed, retrying (backoff {backoff}s): {task.transcript}')
+                logger.info('Translation failed, retrying (backoff %ds)', backoff)
 
     def _get_results(self):
         results = []
@@ -142,9 +149,9 @@ class LLMTranslator(LoopWorkerBase):
             task = self.processing_queue.popleft()
             if not task.translation:
                 if _is_task_timeout(task, self.timeout):
-                    print(f'Translation timeout: {task.transcript}')
+                    logger.error('Translation timed out after %ss', self.timeout)
                 else:
-                    print(f'Translation failed: {task.transcript}')
+                    logger.error('Translation failed')
             results.append(task)
         return results
 
@@ -160,6 +167,7 @@ class LLMTranslator(LoopWorkerBase):
                         if self.retry_if_translation_fails:
                             self._retrigger_failed_tasks()
                         time.sleep(0.1)
+                    logger.debug('All pending translation tasks completed')
                     output_queue.put(None)
                     break
                 self._prepare_context(task)
@@ -192,12 +200,13 @@ class GPTTranslator(LLMTranslator):
         self.service_tier = service_tier
 
     def translate(self, translation_task: TranslationTask):
+        logger.debug('Preparing OpenAI translation request')
         client = ClientPool.get_openai_client()
 
         system_prompt, user_content = self._build_messages(translation_task)
         if self.debug_mode:
-            print(f'{INFO}[System] {system_prompt}')
-            print(f'{INFO}[User] {user_content}')
+            logger.debug('[System] %s', system_prompt)
+            logger.debug('[User] %s', user_content)
         messages = [{'role': 'system', 'content': system_prompt}]
         messages.append({'role': 'user', 'content': user_content})
 
@@ -230,17 +239,19 @@ class GPTTranslator(LLMTranslator):
             if self.service_tier is not None:
                 kwargs["service_tier"] = self.service_tier
 
+            logger.debug('Sending translation request to OpenAI API')
             completion = client.chat.completions.create(**kwargs)
+            logger.debug('Received translation response from OpenAI API')
 
             translation_task.translation = completion.choices[0].message.content
             if self.debug_mode and hasattr(completion, 'usage') and completion.usage:
-                print(f'{INFO}[Usage] {completion.usage}')
+                logger.debug('[Usage] %s', completion.usage)
             if self.use_json_result:
                 translation_task.translation = _parse_json_completion(translation_task.translation)
             translation_task.translation = self._validate_translation(translation_task.translation)
         except Exception as e:
             translation_task.translation_failed = True
-            print(e)
+            logger.error('OpenAI translation request failed (%s)', type(e).__name__)
             return
 
 
@@ -271,12 +282,13 @@ class GeminiTranslator(LLMTranslator):
     def translate(self, translation_task: TranslationTask):
         from google.genai import types
 
+        logger.debug('Preparing Gemini translation request')
         client = ClientPool.get_google_client()
 
         system_prompt, user_content = self._build_messages(translation_task)
         if self.debug_mode:
-            print(f'{INFO}[System] {system_prompt}')
-            print(f'{INFO}[User] {user_content}')
+            logger.debug('[System] %s', system_prompt)
+            logger.debug('[User] %s', user_content)
         messages = [{'role': 'user', 'parts': [{'text': user_content}]}]
 
         config_kwargs = {
@@ -303,14 +315,16 @@ class GeminiTranslator(LLMTranslator):
         config = types.GenerateContentConfig(**config_kwargs)
 
         try:
+            logger.debug('Sending translation request to Gemini API')
             response = client.models.generate_content(model=self.model, contents=messages, config=config)
+            logger.debug('Received translation response from Gemini API')
             translation_task.translation = response.text
             if self.debug_mode and hasattr(response, 'usage_metadata') and response.usage_metadata:
-                print(f'{INFO}[Usage] {response.usage_metadata}')
+                logger.debug('[Usage] %s', response.usage_metadata)
             if self.use_json_result:
                 translation_task.translation = _parse_json_completion(translation_task.translation)
             translation_task.translation = self._validate_translation(translation_task.translation)
         except Exception as e:
             translation_task.translation_failed = True
-            print(e)
+            logger.error('Gemini translation request failed (%s)', type(e).__name__)
             return

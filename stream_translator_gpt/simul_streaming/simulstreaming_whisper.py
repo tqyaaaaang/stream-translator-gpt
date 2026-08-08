@@ -1,10 +1,13 @@
 from .whisper_streaming.base import OnlineProcessorInterface, ASRBase
 
-import sys
+import logging
 import torch
 
 from .simul_whisper.config import AlignAttConfig
 from .simul_whisper.simul_whisper import PaddedAlignAttWhisper
+
+
+logger = logging.getLogger('main')
 
 
 class SimulWhisperASR(ASRBase):
@@ -42,7 +45,7 @@ class SimulWhisperASR(ASRBase):
         self.model.refresh_segment(complete=True)
 
     def use_vad(self):
-        print("VAD not implemented", file=sys.stderr)
+        logger.warning("VAD is not implemented for SimulStreaming")
 
     def set_translate_task(self):
         # this is not used. Translate task is set another way.

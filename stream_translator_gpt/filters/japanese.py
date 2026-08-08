@@ -1,4 +1,8 @@
+import logging
 import re
+
+
+logger = logging.getLogger('main')
 
 HALLUCINATION_KEYWORDS = [
     '字幕作成',
@@ -46,16 +50,16 @@ def japanese_filter(text: str):
 
     for kw in HALLUCINATION_KEYWORDS:
         if kw in text:
-            print('filter', text)
+            logger.warning('filter %s', text)
             return ''
 
     for pattern in HALLUCINATION_PATTERNS:
         if pattern.search(text):
-            print('filter', text)
+            logger.warning('filter %s', text)
             return ''
 
     if clean_text in HALLUCINATION_SENTENCES or len(clean_text) < 3:
-        print('filter', text)
+        logger.warning('filter %s', text)
         return ''
 
     return text

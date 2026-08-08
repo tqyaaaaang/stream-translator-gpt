@@ -1,3 +1,4 @@
+import logging
 import os
 import io
 import queue
@@ -8,11 +9,14 @@ from scipy.io.wavfile import write as write_audio
 import numpy as np
 
 from . import filters
-from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, ClientPool, INFO, WARNING
+from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, ClientPool
 from .simul_streaming.simul_whisper.whisper.utils import compression_ratio
 
 # Application-level bound for one history result; prompt builders reserve space for keywords as needed.
 MAX_HISTORY_CONTEXT_LENGTH = 500
+
+
+logger = logging.getLogger('main')
 
 
 class AudioTranscriber(LoopWorkerBase):
@@ -44,6 +48,8 @@ class AudioTranscriber(LoopWorkerBase):
             return None
         if len(history_context) <= max_length:
             return history_context
+        logger.debug('Truncating transcription history context from %d to %d characters', len(history_context),
+                     max(max_length, 0))
         return history_context[-max_length:] if max_length > 0 else None
 
     def build_transcription_prompt(self, history_context: str | None) -> str | None:
@@ -67,7 +73,7 @@ class AudioTranscriber(LoopWorkerBase):
                     continue
                 filter_func = getattr(filters, filter_name, None)
                 if not filter_func:
-                    print(f'{WARNING}Unknown filter "{filter_name}", skipping.')
+                    logger.warning('Unknown filter "%s", skipping.', filter_name)
                     continue
                 if filter_func not in chain:
                     chain.append(filter_func)
@@ -77,11 +83,15 @@ class AudioTranscriber(LoopWorkerBase):
                 if lf not in chain:
                     chain.append(lf)
 
+        logger.debug('Enabled transcription filters: %s', ', '.join(f.__name__ for f in chain) or 'none')
         return chain
 
     def filter_text(self, text: str) -> str:
         for f in self.filter_chain:
-            text = f(text)
+            filtered_text = f(text)
+            if filtered_text != text:
+                logger.debug('Transcription filter %s changed the result', f.__name__)
+            text = filtered_text
         return text
 
     def loop(self, input_queue: queue.SimpleQueue[TranslationTask], output_queue: queue.SimpleQueue[TranslationTask]):
@@ -90,15 +100,21 @@ class AudioTranscriber(LoopWorkerBase):
         while True:
             task = input_queue.get()
             if task is None:
+                logger.debug('Audio transcriber input exhausted')
                 output_queue.put(None)
                 break
 
             history_context = (filters.symbol_filter(previous_text) or None) if self.use_history_context else None
 
+            logger.debug('Transcribing audio from %s to %s (%d samples)', sec2str(task.time_range[0]),
+                         sec2str(task.time_range[1]), len(task.audio))
             text, tokens = self.transcribe(task.audio, history_context=history_context)
+            logger.debug('Transcription completed for audio from %s to %s', sec2str(task.time_range[0]),
+                         sec2str(task.time_range[1]))
 
             if self.transcription_keywords and text.strip().rstrip(',') == self.transcription_keywords.strip().rstrip(
                     ','):
+                logger.info('Filtered transcription identical to the configured transcription keywords')
                 text = ""
 
             # Repetition detection: reset context if compression ratio too high OR token diversity too low
@@ -108,11 +124,15 @@ class AudioTranscriber(LoopWorkerBase):
                 unique_ratio = len(set(tokens)) / len(tokens) if tokens else 1.0
 
                 if zlib_ratio > 1.5 or unique_ratio < 0.6:
+                    logger.warning('Repetitive transcription detected (compression ratio %.2f, unique token ratio %.2f); '
+                                   'resetting transcription context', zlib_ratio, unique_ratio)
                     self.reset_context()
                     is_repetitive = True
 
             task.transcript = self.filter_text(text).strip()
             if not task.transcript:
+                logger.warning('Skipping empty transcription from %s to %s', sec2str(task.time_range[0]),
+                               sec2str(task.time_range[1]))
                 continue
             previous_text = "" if is_repetitive else task.transcript
             if self.print_result:
@@ -130,7 +150,7 @@ class OpenaiWhisper(AudioTranscriber):
         super().__init__(language=language, **kwargs)
         import whisper
 
-        print(f'{INFO}Loading Whisper model: {model}')
+        logger.warning('Loading Whisper model: %s', model)
         self.model = whisper.load_model(model)
 
     def transcribe(self, audio: np.ndarray, history_context: str | None = None) -> tuple[str, list | None]:
@@ -152,8 +172,8 @@ def _apply_hf_proxy(proxy: str):
         session = huggingface_hub.utils.get_session()
         session.proxies = {'http': proxy, 'https': proxy}
         session.verify = ClientPool.verify_ssl
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning('Failed to configure Hugging Face proxy/SSL settings (%s)', type(exc).__name__)
 
 
 class FasterWhisper(AudioTranscriber):
@@ -164,7 +184,7 @@ class FasterWhisper(AudioTranscriber):
 
         if proxy:
             _apply_hf_proxy(proxy)
-        print(f'{INFO}Loading Faster-Whisper model: {model}')
+        logger.warning('Loading Faster-Whisper model: %s', model)
         self.model = WhisperModel(model, device='auto', compute_type='auto')
 
     def transcribe(self, audio: np.ndarray, history_context: str | None = None) -> tuple[str, list | None]:
@@ -186,13 +206,13 @@ class SimulStreaming(AudioTranscriber):
 
         fw_encoder = None
         if use_faster_whisper:
-            print(f'{INFO}Loading Faster-Whisper as encoder for SimulStreaming: {model}')
+            logger.warning('Loading Faster-Whisper as encoder for SimulStreaming: %s', model)
             from faster_whisper import WhisperModel
             if proxy:
                 _apply_hf_proxy(proxy)
             fw_encoder = WhisperModel(model, device='auto', compute_type='auto')
 
-        print(f'{INFO}Loading SimulStreaming model: {model}')
+        logger.warning('Loading SimulStreaming model: %s', model)
         simulstreaming_params = {
             "language": language,
             "model": model,
@@ -222,6 +242,7 @@ class SimulStreaming(AudioTranscriber):
         return result.get('text', ''), result.get('tokens', None)
 
     def reset_context(self):
+        logger.debug('Resetting SimulStreaming transcription context')
         self.asr_online.model.refresh_segment(complete=True)
         self.asr_online.unicode_buffer = []
 
@@ -231,11 +252,12 @@ class RemoteOpenaiTranscriber(AudioTranscriber):
 
     def __init__(self, model: str, language: str, proxy: str, **kwargs) -> None:
         super().__init__(language=language, **kwargs)
-        print(f'{INFO}Using {model} API as transcription engine.')
+        logger.warning('Using %s API as transcription engine.', model)
         self.model = model
 
     def transcribe(self, audio: np.ndarray, history_context: str | None = None) -> tuple[str, list | None]:
         # Create an in-memory buffer
+        logger.debug('Preparing audio for remote transcription')
         audio_buffer = io.BytesIO()
         audio_buffer.name = 'audio.wav'
         write_audio(audio_buffer, SAMPLE_RATE, audio)
@@ -267,7 +289,9 @@ class RemoteOpenaiTranscriber(AudioTranscriber):
                 call_args['prompt'] = prompt
 
         client = ClientPool.get_openai_client()
+        logger.debug('Sending audio to remote OpenAI transcription API')
         result = client.audio.transcriptions.create(**call_args).text
+        logger.debug('Result from remote OpenAI transcription API received')
         return result, None
 
 
@@ -283,6 +307,7 @@ class HFTranscriber(AudioTranscriber):
         if not os.path.exists(model):
             try:
                 from huggingface_hub import model_info
+                logger.debug('Validating Hugging Face ASR model metadata: %s', model)
                 info = model_info(model)
                 tag = info.pipeline_tag
                 if tag and tag != 'automatic-speech-recognition':
@@ -291,9 +316,9 @@ class HFTranscriber(AudioTranscriber):
                         f'It is not compatible with --use_hf_asr. '
                         f'Please choose a model with pipeline_tag="automatic-speech-recognition" on HuggingFace Hub.')
             except ImportError:
-                pass
+                logger.debug('huggingface_hub is unavailable; skipping ASR model metadata validation')
 
-        print(f'{INFO}Loading HuggingFace ASR model: {model}')
+        logger.warning('Loading HuggingFace ASR model: %s', model)
         self.pipe = pipeline('automatic-speech-recognition', model=model, device_map='auto')
 
     def transcribe(self, audio: np.ndarray, history_context: str | None = None) -> tuple[str, list | None]:

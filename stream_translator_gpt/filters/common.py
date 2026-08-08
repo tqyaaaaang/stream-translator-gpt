@@ -1,4 +1,8 @@
+import logging
 import re
+
+
+logger = logging.getLogger('main')
 
 
 def emoji_filter(text: str):
@@ -33,6 +37,7 @@ def repetition_filter(text: str, max_repeats=3):
                 if count >= max_repeats:
                     keep_count = max_repeats
                     kept_text = substring * keep_count
+                    logger.debug('Collapsed %d repeated transcription fragments to %d', count, keep_count)
                     return text[:i] + kept_text + text[curr:]
 
     return text

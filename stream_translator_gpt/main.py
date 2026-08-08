@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 import os
 import platform
 import queue
@@ -16,13 +17,17 @@ if __name__ == '__main__':
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     __package__ = "stream_translator_gpt"
 
-from .common import ClientPool, start_daemon_thread, is_url, WARNING, ERROR, INFO
+from .common import ClientPool, start_daemon_thread, is_url
 from .audio_getter import StreamAudioGetter, LocalFileAudioGetter, DeviceAudioGetter
 from .audio_slicer import AudioSlicer
 from .audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
 from .llm_translator import GPTTranslator, GeminiTranslator
 from .result_exporter import ResultExporter
+from .logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
 from . import __version__
+
+
+logger = logging.getLogger('main')
 
 
 @dataclasses.dataclass
@@ -198,7 +203,10 @@ class Config:
     """GPT parameter. Specifies processing priority tier. Options: auto / default / flex / priority."""
 
     debug_mode: bool = False
-    """Enable debug mode. Print messages sent to LLM and usage info after each translation call."""
+    """Enable debug mode. Log messages sent to LLM and usage info after each translation call."""
+
+    verbose: Annotated[tyro.conf.UseCounterAction[int], tyro.conf.arg(aliases=('-v',))] = 0
+    """Increase log verbosity. Use -v for INFO, -vv for DEBUG and -vvv for very detailed debug logging."""
 
     processing_proxy: str | None = None
     """Use the specified HTTP/HTTPS/SOCKS proxy for Whisper/GPT API (Gemini currently doesn't support specifying a
@@ -235,6 +243,7 @@ class Config:
 
 def run(config: Config):
     """Run the transcription / translation pipeline until the input is exhausted."""
+    logger.info('Initializing transcription and translation pipeline')
     ClientPool.init(openai_api_key=config.openai_api_key,
                     google_api_key=config.google_api_key,
                     proxy=config.processing_proxy,
@@ -249,16 +258,18 @@ def run(config: Config):
     translator_to_exporter_queue = queue.SimpleQueue() if config.translation_prompt else transcriber_to_translator_queue
 
     # Init workers
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(thread_name_prefix='initializer') as executor:
 
         def init_audio_getter():
             if config.url.lower() == 'device':
+                logger.debug('Selected device audio input')
                 return DeviceAudioGetter(
                     device_index=config.device_index,
                     use_mic=config.mic,
                     interval=config.device_recording_interval,
                 )
             elif is_url(config.url):
+                logger.debug('Selected stream audio input')
                 return StreamAudioGetter(
                     url=config.url,
                     format=config.format,
@@ -266,6 +277,7 @@ def run(config: Config):
                     proxy=config.input_proxy,
                 )
             else:
+                logger.debug('Selected local file audio input')
                 return LocalFileAudioGetter(file_path=config.url)
 
         audio_getter_future = executor.submit(init_audio_getter)
@@ -291,27 +303,32 @@ def run(config: Config):
                 'transcription_keywords': config.transcription_keywords,
             }
             if config.use_simul_streaming:
+                logger.debug('Selected SimulStreaming transcription backend')
                 return SimulStreaming(model=config.model,
                                       language=config.language,
                                       use_faster_whisper=config.use_faster_whisper,
                                       proxy=config.processing_proxy,
                                       **common_args)
             elif config.use_faster_whisper:
+                logger.debug('Selected Faster-Whisper transcription backend')
                 return FasterWhisper(model=config.model,
                                      language=config.language,
                                      proxy=config.processing_proxy,
                                      **common_args)
             elif config.use_openai_transcription_api:
+                logger.debug('Selected OpenAI transcription API backend')
                 return RemoteOpenaiTranscriber(model=config.openai_transcription_model,
                                                language=config.language,
                                                proxy=config.processing_proxy,
                                                **common_args)
             elif config.use_hf_asr:
+                logger.debug('Selected Hugging Face ASR backend')
                 return HFTranscriber(model=config.model,
                                      language=config.language,
                                      proxy=config.processing_proxy,
                                      **common_args)
             else:
+                logger.debug('Selected Whisper transcription backend')
                 return OpenaiWhisper(model=config.model, language=config.language, **common_args)
 
         transcriber_future = executor.submit(init_transcriber)
@@ -328,6 +345,7 @@ def run(config: Config):
                 'debug_mode': config.debug_mode,
             }
             if config.google_api_key:
+                logger.debug('Selected Gemini translation backend')
                 return GeminiTranslator(
                     model=config.gemini_model,
                     temperature=config.temperature,
@@ -336,6 +354,7 @@ def run(config: Config):
                     **common_args,
                 )
             else:
+                logger.debug('Selected OpenAI translation backend')
                 return GPTTranslator(
                     model=config.gpt_model,
                     prompt_cache_key=config.prompt_cache_key,
@@ -366,51 +385,56 @@ def run(config: Config):
         transcriber = transcriber_future.result()
         translator = translator_future.result()
         exporter = exporter_future.result()
+        logger.debug('All pipeline workers initialized')
 
     if hasattr(audio_getter, '_exit_handler'):
         signal.signal(signal.SIGINT, audio_getter._exit_handler)
 
-    print(f'{INFO}Initialization complete, starting up...')
+    logger.warning('Initialization complete, starting up...')
 
     # Start working
-    start_daemon_thread(audio_getter.loop, output_queue=getter_to_slicer_queue)
+    start_daemon_thread(audio_getter.loop, name='getter', output_queue=getter_to_slicer_queue)
     start_daemon_thread(
         slicer.loop,
+        name='slicer',
         input_queue=getter_to_slicer_queue,
         output_queue=slicer_to_transcriber_queue,
     )
     start_daemon_thread(
         transcriber.loop,
+        name='transcriber',
         input_queue=slicer_to_transcriber_queue,
         output_queue=transcriber_to_translator_queue,
     )
     if translator:
         start_daemon_thread(
             translator.loop,
+            name='translator',
             input_queue=transcriber_to_translator_queue,
             output_queue=translator_to_exporter_queue,
         )
     exporter_thread = start_daemon_thread(
         exporter.loop,
+        name='exporter',
         input_queue=translator_to_exporter_queue,
     )
 
     while exporter_thread.is_alive():
         time.sleep(1)
-    print(f'{INFO}All processing completed, program exits.')
+    logger.warning('All processing completed, program exits.')
 
 
 def _preprocess_deprecated_flags(argv):
-    """Rewrite deprecated flags to their new form, printing a warning for each."""
+    """Rewrite deprecated flags and legacy numeric verbosity arguments."""
     processed = []
-    for arg in argv:
+    for arg in normalize_verbosity_args(argv):
         if arg.replace('_', '-') == '--hide-transcribe-result':
-            print(f'{WARNING}--hide_transcribe_result is deprecated and will be removed in future versions. '
-                  'Please use --no-show-transcribe-result instead.')
+            logger.warning('--hide_transcribe_result is deprecated and will be removed in future versions. '
+                           'Please use --no-show-transcribe-result instead.')
             processed.append('--no-show-transcribe-result')
         elif arg.replace('_', '-') == '--transcription-initial-prompt':
-            print(f'{WARNING}--transcription-initial-prompt is deprecated and will be removed in future versions. '
-                  'Please use --transcription-keywords instead.')
+            logger.warning('--transcription-initial-prompt is deprecated and will be removed in future versions. '
+                           'Please use --transcription-keywords instead.')
             processed.append('--transcription-keywords')
         else:
             processed.append(arg)
@@ -431,6 +455,7 @@ def _apply_overall_proxy(config: Config):
         config.processing_proxy = config.proxy
     if config.output_proxy is None:
         config.output_proxy = config.proxy
+    logger.info('Applied the overall proxy to environment and unset proxy options')
 
 
 def _print_audio_devices():
@@ -440,8 +465,8 @@ def _print_audio_devices():
         try:
             import pyaudio as pa
         except ImportError:
-            print("PyAudio is not installed. Unable to list devices.")
-            print("Debian/Ubuntu/Colab: apt install portaudio19-dev && pip install pyaudio")
+            logger.error('PyAudio is not installed. Unable to list devices.')
+            logger.error('Debian/Ubuntu/Colab: apt install portaudio19-dev && pip install pyaudio')
             sys.exit(1)
 
     pyaudio = pa.PyAudio()
@@ -465,15 +490,18 @@ def _print_stream_formats(config: Config):
         cmd.extend(['--cookies', config.cookies])
     if config.input_proxy:
         cmd.extend(['--proxy', config.input_proxy])
-    subprocess.run(cmd)
+    logger.info('Listing available stream formats')
+    result = subprocess.run(cmd)
+    if result.returncode:
+        logger.error('yt-dlp format listing exited with status %d', result.returncode)
 
 
 def _check_ffmpeg(config: Config):
     if config.url.lower() != 'device' and not shutil.which('ffmpeg'):
         if platform.system() == 'Windows':
-            print(f'{ERROR}ffmpeg not found. Please install it with: winget install ffmpeg')
+            logger.error('ffmpeg not found. Please install it with: winget install ffmpeg')
         else:
-            print(f'{ERROR}ffmpeg not found. Please install it with: sudo apt install ffmpeg')
+            logger.error('ffmpeg not found. Please install it with: sudo apt install ffmpeg')
         sys.exit(1)
 
 
@@ -481,17 +509,16 @@ def _validate_and_normalize(config: Config):
     """Check option combinations and normalize values, exiting with an error message on invalid input."""
     if config.model.endswith('.en'):
         if config.model == 'large.en':
-            print(
-                f'{ERROR}English model does not have large model, please choose from {{tiny.en, small.en, medium.en}}')
+            logger.error('English model does not have large model, please choose from '
+                         '{tiny.en, small.en, medium.en}')
             sys.exit(1)
         if config.language != 'English' and config.language != 'en':
             if config.language == 'auto':
-                print(f'{WARNING}Using .en model, setting language from auto to English')
+                logger.warning('Using .en model, setting language from auto to English')
                 config.language = 'en'
             else:
-                print(
-                    f'{ERROR}English model cannot be used to detect non english language, please choose a non .en model'
-                )
+                logger.error('English model cannot be used to detect non english language, '
+                             'please choose a non .en model')
                 sys.exit(1)
 
     transcription_encoder_flag_num = 0
@@ -507,18 +534,18 @@ def _validate_and_normalize(config: Config):
         transcription_encoder_flag_num += 1
         transcription_decoder_flag_num += 1
     if transcription_encoder_flag_num > 1:
-        print(f'{ERROR}Cannot use Faster Whisper, OpenAI Transcription API or HuggingFace ASR at the same time')
+        logger.error('Cannot use Faster Whisper, OpenAI Transcription API or HuggingFace ASR at the same time')
         sys.exit(1)
     if transcription_decoder_flag_num > 1:
-        print(f'{ERROR}Cannot use SimulStreaming, OpenAI Transcription API or HuggingFace ASR at the same time')
+        logger.error('Cannot use SimulStreaming, OpenAI Transcription API or HuggingFace ASR at the same time')
         sys.exit(1)
 
     if config.use_openai_transcription_api and not config.openai_api_key:
-        print(f'{ERROR}Please fill in the OpenAI API key when enabling OpenAI Transcription API')
+        logger.error('Please fill in the OpenAI API key when enabling OpenAI Transcription API')
         sys.exit(1)
 
     if config.translation_prompt and not (config.openai_api_key or config.google_api_key):
-        print(f'{ERROR}Please fill in the OpenAI / Google API key when enabling LLM translation')
+        logger.error('Please fill in the OpenAI / Google API key when enabling LLM translation')
         sys.exit(1)
 
     if config.language == 'auto':
@@ -526,30 +553,40 @@ def _validate_and_normalize(config: Config):
 
     if config.output_file_path:
         if os.path.splitext(config.output_file_path)[1].lower() == '.srt' and not config.output_timestamps:
-            print(f'{WARNING}Output timestamps are required for .srt files, enabling them automatically.')
+            logger.warning('Output timestamps are required for .srt files, enabling them automatically.')
             config.output_timestamps = True
         output_dir = os.path.dirname(os.path.abspath(config.output_file_path))
         if not os.path.isdir(output_dir):
-            print(f'{ERROR}Output directory does not exist: {output_dir}')
+            logger.error('Output directory does not exist: %s', output_dir)
             sys.exit(1)
 
 
 def cli():
-    print(f'{INFO}Version: {__version__}')
-    config = tyro.cli(Config, args=_preprocess_deprecated_flags(sys.argv[1:]), prog='stream-translator-gpt')
+    argv = sys.argv[1:]
+    bootstrap_verbosity = verbosity_from_argv(argv)
+    if any(arg.replace('_', '-') == '--debug-mode' for arg in argv):
+        bootstrap_verbosity = max(bootstrap_verbosity, 2)
+    configure_logging(bootstrap_verbosity)
 
-    _apply_overall_proxy(config)
+    try:
+        logger.warning('Version: %s', __version__)
+        config = tyro.cli(Config, args=_preprocess_deprecated_flags(argv), prog='stream-translator-gpt')
+        configure_logging(max(config.verbose, 2 if config.debug_mode else 0))
 
-    if config.list_devices:
-        _print_audio_devices()
-        return
-    if config.list_format:
-        _print_stream_formats(config)
-        return
+        _apply_overall_proxy(config)
 
-    _check_ffmpeg(config)
-    _validate_and_normalize(config)
-    run(config)
+        if config.list_devices:
+            _print_audio_devices()
+            return
+        if config.list_format:
+            _print_stream_formats(config)
+            return
+
+        _check_ffmpeg(config)
+        _validate_and_normalize(config)
+        run(config)
+    finally:
+        shutdown_logging()
 
 
 if __name__ == '__main__':

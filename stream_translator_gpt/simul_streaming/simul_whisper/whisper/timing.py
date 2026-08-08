@@ -1,4 +1,5 @@
 import itertools
+import logging
 import subprocess
 import warnings
 from dataclasses import dataclass
@@ -11,6 +12,10 @@ import torch.nn.functional as F
 
 from .audio import HOP_LENGTH, SAMPLE_RATE, TOKENS_PER_SECOND
 from .tokenizer import Tokenizer
+from ....logging_utils import DDEBUG
+
+
+logger = logging.getLogger('main')
 
 if TYPE_CHECKING:
     from .model import Whisper
@@ -201,17 +206,19 @@ def find_alignment(
     weights = median_filter(weights, medfilt_width)
 
     matrix = weights.mean(axis=0)
-    print("attention", matrix.shape, matrix[:5, :5])
+    logger.log(DDEBUG, "Attention matrix before trimming: shape=%s, preview=%s", matrix.shape, matrix[:5, :5])
     matrix = matrix[len(tokenizer.sot_sequence):-1]
-    print("attention", matrix.shape, matrix[:5, :5])
+    logger.log(DDEBUG, "Attention matrix after trimming: shape=%s, preview=%s", matrix.shape, matrix[:5, :5])
     text_indices, time_indices = dtw(-matrix)
 
-    print("num_frames", num_frames)
-    print("attention", matrix.shape, matrix[:5, :5])
-    print("text_indices", text_indices)
-    print("time", time_indices)
-    print("text_tokens", text_tokens, tokenizer.decode(text_tokens), len(text_tokens))
-    print("eot", tokenizer.eot)
+    logger.log(DDEBUG, "Alignment frame count: %s", num_frames)
+    logger.log(DDEBUG, "Alignment attention matrix: shape=%s, preview=%s", matrix.shape, matrix[:5, :5])
+    logger.log(DDEBUG, "Alignment text indices: %s", text_indices)
+    logger.log(DDEBUG, "Alignment time indices: %s", time_indices)
+    if logger.isEnabledFor(DDEBUG):
+        logger.log(DDEBUG, "Alignment text tokens: tokens=%s, text=%s, count=%s", text_tokens,
+                   tokenizer.decode(text_tokens), len(text_tokens))
+    logger.log(DDEBUG, "Alignment end-of-text token: %s", tokenizer.eot)
 
     words, word_tokens = tokenizer.split_to_word_tokens(text_tokens + [tokenizer.eot])
     if len(word_tokens) <= 1:

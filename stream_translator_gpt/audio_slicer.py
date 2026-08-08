@@ -1,4 +1,5 @@
 import collections
+import logging
 import math
 import os
 import queue
@@ -7,12 +8,16 @@ import warnings
 
 import numpy as np
 
-from .common import TranslationTask, SAMPLE_RATE, FRAME_DURATION, LoopWorkerBase
+from .common import TranslationTask, SAMPLE_RATE, FRAME_DURATION, LoopWorkerBase, sec2str
 
 warnings.filterwarnings('ignore')
 
 
+logger = logging.getLogger('main')
+
+
 def _init_jit_model(model_path: str, device=torch.device('cpu')):
+    logger.debug('Loading Silero VAD model from %s on %s', model_path, device)
     torch.set_grad_enabled(False)
     model = torch.jit.load(model_path, map_location=device)
     model.eval()
@@ -90,6 +95,12 @@ class AudioSlicer(LoopWorkerBase):
             self.min_vad_threshold = 0.0001
             self.max_vad_threshold = 0.6
 
+        logger.debug(
+            'Initialized audio slicer with min_audio_length=%.3f, max_audio_length=%.3f, '
+            'target_audio_length=%.3f, dynamic_no_speech_threshold=%s, vad_threshold=%.4f, '
+            'dynamic_vad_threshold=%s', self.min_audio_length, self.max_audio_length, self.target_audio_length,
+            self.dynamic_no_speech_threshold, self.vad_threshold, self.dynamic_vad_threshold)
+
     def put(self, audio: np.array):
         self.counter += 1
         speech_prob = self.vad.get_speech_prob(audio)
@@ -111,11 +122,14 @@ class AudioSlicer(LoopWorkerBase):
             self.vad_prob_buffer.append(speech_prob)
             if self.counter >= self.vad_lookback_length and self.counter % self.vad_recalc_interval == 0:
                 data = np.array(self.vad_prob_buffer)
+                old_vad_threshold = self.vad_threshold
                 new_vad_threshold = np.quantile(data, self.vad_recalc_quantile, method='linear')
                 self.vad_threshold = self.vad_threshold * 0.25 + new_vad_threshold * 0.75
                 self.vad_threshold = max(self.vad_threshold, self.min_vad_threshold)
                 self.vad_threshold = min(self.vad_threshold, self.max_vad_threshold)
                 self.vad_neg_threshold = _get_neg_threshold(self.vad_threshold)
+                logger.debug('Updated VAD threshold from %.4f to %.4f (negative threshold %.4f)', old_vad_threshold,
+                             self.vad_threshold, self.vad_neg_threshold)
 
     def should_slice(self):
         audio_length = len(self.audio_buffer) * FRAME_DURATION
@@ -150,12 +164,15 @@ class AudioSlicer(LoopWorkerBase):
         while True:
             audio = input_queue.get()
             if audio is None:
+                logger.debug('Audio slicer input exhausted')
                 output_queue.put(None)
                 break
             self.put(audio)
             if self.should_slice():
                 sliced_audio, time_range = self.slice()
+                logger.info('slicer decided to slice %s to %s', sec2str(time_range[0]), sec2str(time_range[1]))
                 task = TranslationTask(sliced_audio, time_range)
                 output_queue.put(task)
             if self.counter % vad_reset_interval == 0:
+                logger.debug('Resetting VAD state after %d audio frames', self.counter)
                 self.vad.reset_states()

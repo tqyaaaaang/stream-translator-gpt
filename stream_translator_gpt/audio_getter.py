@@ -1,3 +1,4 @@
+import logging
 import os
 import platform
 import queue
@@ -13,7 +14,11 @@ import ffmpeg
 import numpy as np
 from scipy.signal import resample
 
-from .common import SAMPLE_RATE, SAMPLES_PER_FRAME, LoopWorkerBase, INFO, WARNING
+from .common import SAMPLE_RATE, SAMPLES_PER_FRAME, LoopWorkerBase
+from .logging_utils import redact_url
+
+
+logger = logging.getLogger('main')
 
 
 def _read_ffmpeg_loop(ffmpeg_process, byte_size: int, output_queue):
@@ -78,6 +83,7 @@ class StreamAudioGetter(LoopWorkerBase):
             shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _exit_handler(self, signum, frame):
+        logger.info('Stopping stream audio getter after signal %s', signum)
         if self.ffmpeg_process:
             self.ffmpeg_process.kill()
         if self.ytdlp_process:
@@ -87,10 +93,11 @@ class StreamAudioGetter(LoopWorkerBase):
         sys.exit(0)
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
-        print(f'{INFO}Opening stream: {self.url}')
+        logger.warning('Opening stream: %s', redact_url(self.url))
         self.ffmpeg_process, self.ytdlp_process = _open_stream(self.url, self.format, self.cookies, self.proxy,
                                                                self.temp_dir)
         _read_ffmpeg_loop(self.ffmpeg_process, self.byte_size, output_queue)
+        logger.info('Stream audio input finished')
 
         self.ffmpeg_process.kill()
         if self.ytdlp_process:
@@ -108,12 +115,13 @@ class LocalFileAudioGetter(LoopWorkerBase):
         self.byte_size = round(SAMPLES_PER_FRAME * 4)  # Factor 4 comes from float32 (4 bytes per sample)
 
     def _exit_handler(self, signum, frame):
+        logger.info('Stopping local file audio getter after signal %s', signum)
         if self.ffmpeg_process:
             self.ffmpeg_process.kill()
         sys.exit(0)
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
-        print(f'{INFO}Opening local file: {self.file_path}')
+        logger.warning('Opening local file: %s', self.file_path)
         try:
             self.ffmpeg_process = (ffmpeg.input(self.file_path,
                                                 loglevel='panic').output('pipe:',
@@ -126,6 +134,7 @@ class LocalFileAudioGetter(LoopWorkerBase):
             raise RuntimeError(f'Failed to load audio: {e.stderr.decode()}') from e
 
         _read_ffmpeg_loop(self.ffmpeg_process, self.byte_size, output_queue)
+        logger.info('Local file audio input finished')
 
         self.ffmpeg_process.kill()
         output_queue.put(None)
@@ -170,6 +179,9 @@ class DeviceAudioGetter(LoopWorkerBase):
                         else:
                             self.device_index = default_speakers["index"]
                     except (OSError, ValueError):
+                        logger.debug('Unable to select the default WASAPI loopback device; falling back to the first '
+                                     'available loopback device',
+                                     exc_info=True)
                         try:
                             loopback = next(self.pyaudio.get_loopback_device_info_generator())
                             self.device_index = loopback['index']
@@ -188,6 +200,7 @@ class DeviceAudioGetter(LoopWorkerBase):
         self.device_name = self.pyaudio.get_device_info_by_index(self.device_index)['name']
 
     def _exit_handler(self, signum, frame):
+        logger.info('Stopping device audio getter after signal %s', signum)
         if self.stream:
             self.stream.stop_stream()
             self.stream.close()
@@ -195,7 +208,7 @@ class DeviceAudioGetter(LoopWorkerBase):
         sys.exit(0)
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
-        print(f'{INFO}Recording device: {self.device_name} ({"Input" if self.use_mic else "Output"})')
+        logger.warning('Recording device: %s (%s)', self.device_name, 'Input' if self.use_mic else 'Output')
 
         try:
             device_info = self.pyaudio.get_device_info_by_index(self.device_index)
@@ -203,11 +216,14 @@ class DeviceAudioGetter(LoopWorkerBase):
             try:
                 native_channels = int(device_info['maxInputChannels'])
             except Exception:
+                logger.debug('Unable to determine the device channel count; defaulting to one channel', exc_info=True)
                 native_channels = 1
             if native_channels < 1:
                 native_channels = 2
 
             read_size = int(native_rate * self.interval)
+            logger.debug('Opening audio device index=%s, native_rate=%d, channels=%d, read_size=%d, resample=%s',
+                         self.device_index, native_rate, native_channels, read_size, native_rate != SAMPLE_RATE)
             self.stream = self.pyaudio.open(format=self.pyaudio_module.paFloat32,
                                             channels=native_channels,
                                             rate=native_rate,
@@ -232,11 +248,12 @@ class DeviceAudioGetter(LoopWorkerBase):
                         buffer = buffer[SAMPLES_PER_FRAME:]
                         output_queue.put(chunk)
                 except OSError as e:
-                    print(f'{WARNING}Audio read error: {e}')
+                    logger.warning('Audio read error: %s', e)
                     continue
-        except Exception as e:
-            print(f'{WARNING}Audio recording error: {e}')
+        except Exception:
+            logger.exception('Audio recording error')
         finally:
+            logger.debug('Closing audio device')
             if self.stream:
                 self.stream.stop_stream()
                 self.stream.close()
