@@ -3,12 +3,10 @@ import os
 import platform
 import queue
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 import threading
-import time
 
 import ffmpeg
 import numpy as np
@@ -21,26 +19,64 @@ from .logging_utils import redact_url
 logger = logging.getLogger('main')
 
 
-def _read_ffmpeg_loop(ffmpeg_process, byte_size: int, output_queue):
-    while ffmpeg_process.poll() is None:
+def _read_ffmpeg_loop(ffmpeg_process, byte_size: int, output_queue, source_name: str = 'ffmpeg'):
+    complete_blocks = 0
+    while True:
         in_bytes = ffmpeg_process.stdout.read(byte_size)
         if not in_bytes:
+            logger.debug('%s audio output reached EOF after %d complete block(s)', source_name, complete_blocks)
             break
         if len(in_bytes) != byte_size:
+            logger.warning('%s returned a short audio block; expected %d bytes, received %d bytes; discarding it',
+                           source_name, byte_size, len(in_bytes))
             continue
         audio = np.frombuffer(in_bytes, np.float32).flatten()
         output_queue.put(audio)
+        complete_blocks += 1
+    return complete_blocks
+
+
+def _wait_for_process(process, process_name: str, timeout: float = 5.0):
+    try:
+        return_code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logger.error('%s did not exit within %.1fs; killing it', process_name, timeout)
+        process.kill()
+        return_code = process.wait()
+
+    if return_code == 0:
+        logger.debug('%s exited successfully', process_name)
+    else:
+        logger.error('%s exited with status %s', process_name, return_code)
+    return return_code
 
 
 def _transport(ytdlp_proc, ffmpeg_proc):
-    while (ytdlp_proc.poll() is None) and (ffmpeg_proc.poll() is None):
-        try:
+    ffmpeg_closed_early = False
+    try:
+        while True:
             chunk = ytdlp_proc.stdout.read(1024)
-            ffmpeg_proc.stdin.write(chunk)
+            if not chunk:
+                logger.debug('yt-dlp output reached EOF')
+                break
+            try:
+                ffmpeg_proc.stdin.write(chunk)
+            except (BrokenPipeError, OSError):
+                ffmpeg_closed_early = True
+                logger.error('ffmpeg closed its input pipe before yt-dlp finished')
+                break
+    except Exception:
+        ffmpeg_closed_early = True
+        logger.exception('Unexpected failure while transporting yt-dlp audio to ffmpeg')
+    finally:
+        try:
+            ffmpeg_proc.stdin.close()
         except (BrokenPipeError, OSError):
-            pass
-    ytdlp_proc.kill()
-    ffmpeg_proc.kill()
+            logger.debug('ffmpeg input pipe was already closed')
+
+        if ffmpeg_closed_early and ytdlp_proc.poll() is None:
+            ytdlp_proc.terminate()
+        _wait_for_process(ytdlp_proc, 'yt-dlp')
 
 
 def _open_stream(url: str, format: str, cookies: str, proxy: str, cwd: str):
@@ -61,9 +97,13 @@ def _open_stream(url: str, format: str, cookies: str, proxy: str, cwd: str):
     except ffmpeg.Error as e:
         raise RuntimeError(f'Failed to load audio: {e.stderr.decode()}') from e
 
-    thread = threading.Thread(target=_transport, args=(ytdlp_process, ffmpeg_process))
+    logger.debug('Started yt-dlp process %d and ffmpeg process %d', ytdlp_process.pid, ffmpeg_process.pid)
+    thread = threading.Thread(target=_transport,
+                              name='stream-transport',
+                              args=(ytdlp_process, ffmpeg_process),
+                              daemon=True)
     thread.start()
-    return ffmpeg_process, ytdlp_process
+    return ffmpeg_process, ytdlp_process, thread
 
 
 class StreamAudioGetter(LoopWorkerBase):
@@ -76,6 +116,7 @@ class StreamAudioGetter(LoopWorkerBase):
         self.temp_dir = tempfile.mkdtemp()
         self.ffmpeg_process = None
         self.ytdlp_process = None
+        self.transport_thread = None
         self.byte_size = round(SAMPLES_PER_FRAME * 4)  # Factor 4 comes from float32 (4 bytes per sample)
 
     def __del__(self):
@@ -94,14 +135,18 @@ class StreamAudioGetter(LoopWorkerBase):
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
         logger.warning('Opening stream: %s', redact_url(self.url))
-        self.ffmpeg_process, self.ytdlp_process = _open_stream(self.url, self.format, self.cookies, self.proxy,
-                                                               self.temp_dir)
-        _read_ffmpeg_loop(self.ffmpeg_process, self.byte_size, output_queue)
+        self.ffmpeg_process, self.ytdlp_process, self.transport_thread = _open_stream(
+            self.url, self.format, self.cookies, self.proxy, self.temp_dir)
+        _read_ffmpeg_loop(self.ffmpeg_process, self.byte_size, output_queue, source_name='stream ffmpeg')
+        _wait_for_process(self.ffmpeg_process, 'ffmpeg')
+        self.transport_thread.join(timeout=5)
+        if self.transport_thread.is_alive():
+            logger.error('Stream transport thread did not exit within 5.0s; killing yt-dlp')
+            if self.ytdlp_process.poll() is None:
+                self.ytdlp_process.kill()
+            self.transport_thread.join(timeout=1)
         logger.info('Stream audio input finished')
 
-        self.ffmpeg_process.kill()
-        if self.ytdlp_process:
-            self.ytdlp_process.kill()
         if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir, ignore_errors=True)
         output_queue.put(None)
