@@ -118,7 +118,7 @@ class PartialUtteranceSplitter:
         if (self.committed_source_text and not new_text.startswith(self.committed_source_text)
                 and old_committed_text and new_text[:self.committed_offset] != old_committed_text):
             if not self.prefix_conflicted:
-                logger.warning('Modulate revised an already committed partial-transcript prefix; '
+                logger.info('Modulate revised an already committed partial-transcript prefix; '
                                'keeping the revised prefix consumed to avoid duplicate output')
             self.prefix_conflicted = True
         self.preview_text = new_text

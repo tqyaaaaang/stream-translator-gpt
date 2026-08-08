@@ -137,7 +137,7 @@ def _parse_translation_context_completion(completion: str) -> tuple[str, str] | 
     if not translation or not context:
         return None
     if len(context) > TRANSLATION_CONTEXT_MAX_CHARS:
-        logger.warning('Translation context exceeded %d Unicode character(s); truncating it',
+        logger.info('Translation context exceeded %d Unicode character(s); truncating it',
                        TRANSLATION_CONTEXT_MAX_CHARS)
         context = context[:TRANSLATION_CONTEXT_MAX_CHARS].rstrip()
     return translation, context

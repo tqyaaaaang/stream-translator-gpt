@@ -49,7 +49,7 @@ class _RealtimeAudioPacer:
         if lag > self.max_lag:
             self.started_at += lag
             deadline = now
-            logger.warning('Realtime %s fell %.3fs behind; resuming without a catch-up burst',
+            logger.info('Realtime %s fell %.3fs behind; resuming without a catch-up burst',
                            self.source_description, lag)
         while (delay := deadline - self.clock()) > 0:
             if self.stop_event.wait(delay):
