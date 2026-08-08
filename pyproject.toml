@@ -60,6 +60,7 @@ hf_asr = ["transformers>=4.40.0", "accelerate>=0.30.0"]
 [project.scripts]
 stream-translator-gpt = "stream_translator_gpt.main:cli"
 stream-translator-gpt-webui = "webui.webui:main"
+stream-translator-build-terms = "utils.term_utils:main"
 
 [project.urls]
 Homepage = "https://github.com/ionic-bond/stream-translator-gpt"
@@ -67,6 +68,7 @@ Issues = "https://github.com/ionic-bond/stream-translator-gpt/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["stream_translator_gpt*", "webui*", "utils*"]
 
 [tool.setuptools.package-data]
 stream_translator_gpt = ["*.jit", "**/*.tiktoken", "**/*.npz"]
