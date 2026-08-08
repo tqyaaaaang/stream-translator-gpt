@@ -93,18 +93,17 @@ class Config:
     fallback for input-capable devices that PyAudio cannot capture."""
 
     device_multiplier: float = 1.0
-    """Legacy perceptual volume factor for the sounddevice getter. 1 keeps the original amplitude; this option does
-    not affect the PyAudio getter."""
+    """Legacy perceptual volume factor for device capture. 1 keeps the original amplitude. Supported by both the
+    PyAudio and sounddevice getters."""
 
     device_audio_debug_dir: str | None = None
-    """Save processed sounddevice input as bounded PCM WAV clips in this directory. Disabled by default and not
-    supported by the PyAudio getter."""
+    """Save processed device input as bounded PCM WAV clips in this directory. Disabled by default."""
 
     device_audio_debug_clip_duration: float = 10.0
-    """Length in seconds of each sounddevice debug WAV clip."""
+    """Length in seconds of each device debug WAV clip."""
 
     device_audio_debug_max_clips: int = 10
-    """Maximum number of sounddevice debug WAV clips written during one run."""
+    """Maximum number of device debug WAV clips written during one run."""
 
     list_devices: Annotated[bool, tyro.conf.FlagCreatePairsOff] = False
     """Print all audio devices info then exit."""
@@ -281,6 +280,10 @@ def _create_audio_getter(config: Config):
             device_index=config.device_index,
             use_mic=config.mic,
             interval=config.device_recording_interval,
+            multiplier=config.device_multiplier,
+            debug_audio_dir=config.device_audio_debug_dir,
+            debug_clip_duration=config.device_audio_debug_clip_duration,
+            debug_max_clips=config.device_audio_debug_max_clips,
         )
     if is_url(config.url):
         logger.debug('Selected stream audio input')
@@ -574,16 +577,10 @@ def _validate_and_normalize(config: Config):
             logger.error('Device recording interval must be greater than zero')
             sys.exit(1)
         try:
-            from .audio_getter import _sounddevice_gain
-            _sounddevice_gain(config.device_multiplier)
+            from .audio_getter import _device_gain
+            _device_gain(config.device_multiplier)
         except ValueError as exc:
             logger.error('%s', exc)
-            sys.exit(1)
-        if config.device_audio_getter != 'sounddevice' and config.device_multiplier != 1.0:
-            logger.error('--device-multiplier only applies to --device-audio-getter sounddevice')
-            sys.exit(1)
-        if config.device_audio_debug_dir and config.device_audio_getter != 'sounddevice':
-            logger.error('--device-audio-debug-dir only applies to --device-audio-getter sounddevice')
             sys.exit(1)
         if config.device_audio_debug_dir and config.device_audio_debug_clip_duration <= 0:
             logger.error('Device audio debug clip duration must be greater than zero')

@@ -362,8 +362,7 @@ def build_translator_command(
         target_url = "device"
         add_arg("--device-recording-interval", device_rec_interval, "device_rec_interval")
         add_arg("--device-audio-getter", device_audio_getter, "device_audio_getter")
-        if device_audio_getter == "sounddevice":
-            add_arg("--device-multiplier", device_multiplier, "device_multiplier")
+        add_arg("--device-multiplier", device_multiplier, "device_multiplier")
         if audio_source == "Input Audio":
             cmd.append("--mic")
     elif input_type == "File":

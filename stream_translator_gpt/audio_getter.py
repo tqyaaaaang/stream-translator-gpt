@@ -198,7 +198,7 @@ class LocalFileAudioGetter(LoopWorkerBase):
         output_queue.put(None)
 
 
-def _sounddevice_gain(volume_factor: float) -> float:
+def _device_gain(volume_factor: float) -> float:
     """Convert the legacy perceptual volume factor to an amplitude gain."""
     if not math.isfinite(volume_factor) or volume_factor < 0:
         raise ValueError('device multiplier must be a finite, non-negative number')
@@ -209,6 +209,30 @@ def _sounddevice_gain(volume_factor: float) -> float:
     if not math.isfinite(gain):
         raise ValueError('device multiplier produces a non-finite gain')
     return gain
+
+
+# Kept for callers that imported the helper while the option was SoundDevice-only.
+_sounddevice_gain = _device_gain
+
+
+def _prepare_device_audio(audio: np.ndarray, native_rate: int, channels: int, gain: float) -> np.ndarray:
+    """Downmix, resample and apply gain outside an audio backend's callback thread."""
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    else:
+        audio = audio.reshape(-1)
+        if channels > 1:
+            complete_samples = len(audio) - len(audio) % channels
+            if complete_samples != len(audio):
+                logger.warning('Discarding %d incomplete interleaved device sample(s)', len(audio) - complete_samples)
+                audio = audio[:complete_samples]
+            if complete_samples:
+                audio = audio.reshape(-1, channels).mean(axis=1)
+    if native_rate != SAMPLE_RATE and len(audio):
+        target_len = max(1, round(len(audio) * SAMPLE_RATE / native_rate))
+        audio = resample(audio, target_len)
+    return np.asarray(audio, dtype=np.float32) * gain
 
 
 class SoundDeviceAudioGetter(LoopWorkerBase):
@@ -243,7 +267,7 @@ class SoundDeviceAudioGetter(LoopWorkerBase):
         self.channels = min(int(device_info.get('max_input_channels', 1)), 2)
         self.interval = interval
         self.volume_factor = multiplier
-        self.gain = _sounddevice_gain(multiplier)
+        self.gain = _device_gain(multiplier)
         self.recording_queue = queue.Queue(maxsize=8)
         self.dropped_blocks = 0
         self.stream = None
@@ -293,15 +317,7 @@ class SoundDeviceAudioGetter(LoopWorkerBase):
                                self.dropped_blocks)
 
     def _prepare_audio(self, audio: np.ndarray) -> np.ndarray:
-        audio = np.asarray(audio, dtype=np.float32)
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        else:
-            audio = audio.reshape(-1)
-        if self.native_rate != SAMPLE_RATE and len(audio):
-            target_len = max(1, round(len(audio) * SAMPLE_RATE / self.native_rate))
-            audio = resample(audio, target_len)
-        return np.asarray(audio, dtype=np.float32) * self.gain
+        return _prepare_device_audio(audio, self.native_rate, self.channels, self.gain)
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
         logger.warning('Recording sounddevice input: %s (index %s)', self.device_name, self.device_index)
@@ -339,7 +355,7 @@ class SoundDeviceAudioGetter(LoopWorkerBase):
 
 
 class _DebugAudioDumper:
-    """Write bounded, atomic PCM16 WAV clips from processed sounddevice audio."""
+    """Write bounded, atomic PCM16 WAV clips from processed device audio."""
 
     def __init__(self, output_dir: str, clip_duration: float, max_clips: int) -> None:
         if clip_duration <= 0:
@@ -423,8 +439,24 @@ class _DebugAudioDumper:
 
 
 class DeviceAudioGetter(LoopWorkerBase):
+    """PyAudio device getter backed by a non-blocking callback stream."""
 
-    def __init__(self, device_index: int, use_mic: bool, interval: float = 0.5) -> None:
+    def __init__(self,
+                 device_index: int | None,
+                 use_mic: bool,
+                 interval: float = 0.5,
+                 multiplier: float = 1.0,
+                 debug_audio_dir: str | None = None,
+                 debug_clip_duration: float = 10.0,
+                 debug_max_clips: int = 10) -> None:
+        if interval <= 0:
+            raise ValueError('device recording interval must be greater than zero')
+        gain = _device_gain(multiplier)
+        if debug_audio_dir and debug_clip_duration <= 0:
+            raise ValueError('device debug clip duration must be greater than zero')
+        if debug_audio_dir and debug_max_clips <= 0:
+            raise ValueError('device debug max clips must be greater than zero')
+
         if platform.system() == 'Windows':
             import pyaudiowpatch as pyaudio
         else:
@@ -440,104 +472,234 @@ class DeviceAudioGetter(LoopWorkerBase):
         self.use_mic = use_mic
         self.interval = interval
         self.stream = None
+        self.volume_factor = multiplier
+        self.gain = gain
+        self.recording_queue = queue.Queue(maxsize=8)
+        self.dropped_blocks = 0
+        self.logged_dropped_blocks = 0
+        self.callback_error = None
+        self.stopping = threading.Event()
+        self.signal_received = threading.Event()
+        self.finished = threading.Event()
+        self.cleanup_lock = threading.Lock()
+        self.pyaudio_terminated = False
+        self.debug_dumper = None
 
-        if use_mic:
+        try:
+            device_info = self._select_device_info()
+            self.device_name = device_info['name']
+            self.native_rate = int(float(device_info['defaultSampleRate']))
+            if self.native_rate <= 0:
+                raise RuntimeError(f'PyAudio device {self.device_index} reported an invalid sample rate.')
+            try:
+                self.channels = int(device_info['maxInputChannels'])
+            except (KeyError, TypeError, ValueError):
+                logger.debug('Unable to determine the PyAudio device channel count; defaulting to one channel',
+                             exc_info=True)
+                self.channels = 1
+            if self.channels < 1:
+                # Preserve the upstream getter's fallback for output/loopback devices whose metadata reports zero.
+                logger.warning('PyAudio device %s reported no input channels; trying two channels', self.device_index)
+                self.channels = 2
+            self.read_size = max(1, round(self.native_rate * self.interval))
+            self.debug_dumper = (_DebugAudioDumper(debug_audio_dir, debug_clip_duration, debug_max_clips)
+                                 if debug_audio_dir else None)
+        except Exception:
+            try:
+                self.pyaudio.terminate()
+            except Exception:
+                logger.debug('Unable to terminate PyAudio after initialization failure', exc_info=True)
+            finally:
+                self.pyaudio_terminated = True
+            raise
+
+    def _select_device_info(self):
+        if self.use_mic:
             if self.device_index is None:
                 default_device = self.pyaudio.get_default_input_device_info()
                 self.device_index = default_device['index']
-        else:
-            if platform.system() == 'Windows':
-                if self.device_index is None:
-                    try:
-                        wasapi_info = self.pyaudio.get_host_api_info_by_type(pyaudio.paWASAPI)
-                        default_speakers = self.pyaudio.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
-                        if not default_speakers["isLoopbackDevice"]:
-                            for loopback in self.pyaudio.get_loopback_device_info_generator():
-                                if default_speakers["name"] in loopback["name"]:
-                                    self.device_index = loopback["index"]
-                                    break
-                            else:
-                                self.device_index = self.pyaudio.get_default_wasapi_loopback()['index']
+        elif platform.system() == 'Windows':
+            if self.device_index is None:
+                try:
+                    wasapi_info = self.pyaudio.get_host_api_info_by_type(self.pyaudio_module.paWASAPI)
+                    default_speakers = self.pyaudio.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
+                    if not default_speakers["isLoopbackDevice"]:
+                        for loopback in self.pyaudio.get_loopback_device_info_generator():
+                            if default_speakers["name"] in loopback["name"]:
+                                self.device_index = loopback["index"]
+                                break
                         else:
-                            self.device_index = default_speakers["index"]
-                    except (OSError, ValueError):
-                        logger.debug('Unable to select the default WASAPI loopback device; falling back to the first '
-                                     'available loopback device',
-                                     exc_info=True)
-                        try:
-                            loopback = next(self.pyaudio.get_loopback_device_info_generator())
-                            self.device_index = loopback['index']
-                        except StopIteration:
-                            raise RuntimeError("No loopback device found.")
-            else:
-                if self.device_index is None:
-                    for i in range(self.pyaudio.get_device_count()):
-                        info = self.pyaudio.get_device_info_by_index(i)
-                        if 'monitor' in info['name'].lower() and info['maxInputChannels'] > 0:
-                            self.device_index = info['index']
-                            break
+                            self.device_index = self.pyaudio.get_default_wasapi_loopback()['index']
                     else:
-                        raise RuntimeError("No monitor device found for loopback capture.")
+                        self.device_index = default_speakers["index"]
+                except (OSError, ValueError):
+                    logger.debug('Unable to select the default WASAPI loopback device; falling back to the first '
+                                 'available loopback device',
+                                 exc_info=True)
+                    try:
+                        loopback = next(self.pyaudio.get_loopback_device_info_generator())
+                        self.device_index = loopback['index']
+                    except StopIteration:
+                        raise RuntimeError("No loopback device found.")
+        elif self.device_index is None:
+            for i in range(self.pyaudio.get_device_count()):
+                info = self.pyaudio.get_device_info_by_index(i)
+                if 'monitor' in info['name'].lower() and info['maxInputChannels'] > 0:
+                    self.device_index = info['index']
+                    break
+            else:
+                raise RuntimeError("No monitor device found for loopback capture.")
 
-        self.device_name = self.pyaudio.get_device_info_by_index(self.device_index)['name']
+        return self.pyaudio.get_device_info_by_index(self.device_index)
+
+    def _queue_stop(self) -> None:
+        self.stopping.set()
+        while True:
+            try:
+                self.recording_queue.put_nowait(None)
+                return
+            except queue.Full:
+                try:
+                    self.recording_queue.get_nowait()
+                except queue.Empty:
+                    pass
+
+    def _recording_callback(self, in_data, frame_count, time_info, status_flags):
+        if self.stopping.is_set():
+            return None, self.pyaudio_module.paComplete
+        try:
+            if not in_data:
+                self._queue_stop()
+                return None, self.pyaudio_module.paComplete
+            block = (bytes(in_data), status_flags)
+            try:
+                self.recording_queue.put_nowait(block)
+            except queue.Full:
+                try:
+                    oldest = self.recording_queue.get_nowait()
+                except queue.Empty:
+                    oldest = None
+                if oldest is None or self.stopping.is_set():
+                    self._queue_stop()
+                    return None, self.pyaudio_module.paComplete
+                try:
+                    self.recording_queue.put_nowait(block)
+                except queue.Full:
+                    return None, self.pyaudio_module.paContinue
+                self.dropped_blocks += 1
+            return None, self.pyaudio_module.paContinue
+        except Exception:
+            self.callback_error = sys.exc_info()
+            self._queue_stop()
+            return None, getattr(self.pyaudio_module, 'paAbort', self.pyaudio_module.paComplete)
+
+    def _log_dropped_blocks(self) -> None:
+        if self.dropped_blocks == self.logged_dropped_blocks:
+            return
+        if self.logged_dropped_blocks == 0 or self.dropped_blocks // 100 > self.logged_dropped_blocks // 100:
+            logger.warning('PyAudio processing is behind; dropped %d queued audio block(s)', self.dropped_blocks)
+        self.logged_dropped_blocks = self.dropped_blocks
+
+    def _cleanup(self) -> None:
+        with self.cleanup_lock:
+            stream = self.stream
+            self.stream = None
+            if stream is not None:
+                try:
+                    if stream.is_active():
+                        stream.stop_stream()
+                except Exception:
+                    logger.debug('Unable to stop PyAudio stream cleanly', exc_info=True)
+                try:
+                    stream.close()
+                except Exception:
+                    logger.debug('Unable to close PyAudio stream cleanly', exc_info=True)
+            if not self.pyaudio_terminated:
+                try:
+                    self.pyaudio.terminate()
+                except Exception:
+                    logger.debug('Unable to terminate PyAudio cleanly', exc_info=True)
+                finally:
+                    self.pyaudio_terminated = True
 
     def _exit_handler(self, signum, frame):
-        logger.info('Stopping device audio getter after signal %s', signum)
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-        self.pyaudio.terminate()
+        logger.info('Stopping PyAudio device getter after signal %s', signum)
+        if self.signal_received.is_set():
+            raise SystemExit(0)
+        self.signal_received.set()
+        self._queue_stop()
+        self._cleanup()
+        if self.debug_dumper is not None and not self.finished.wait(timeout=2.0):
+            logger.warning('Timed out waiting for PyAudio debug audio to finish writing')
         sys.exit(0)
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
-        logger.warning('Recording device: %s (%s)', self.device_name, 'Input' if self.use_mic else 'Output')
+        logger.warning('Recording PyAudio device: %s (%s)', self.device_name, 'Input' if self.use_mic else 'Output')
+        logger.warning('Recording multiplier: %.6f (volume factor %.3f)', self.gain, self.volume_factor)
+        buffer = np.array([], dtype=np.float32)
 
         try:
-            device_info = self.pyaudio.get_device_info_by_index(self.device_index)
-            native_rate = int(device_info['defaultSampleRate'])
-            try:
-                native_channels = int(device_info['maxInputChannels'])
-            except Exception:
-                logger.debug('Unable to determine the device channel count; defaulting to one channel', exc_info=True)
-                native_channels = 1
-            if native_channels < 1:
-                native_channels = 2
-
-            read_size = int(native_rate * self.interval)
             logger.debug('Opening audio device index=%s, native_rate=%d, channels=%d, read_size=%d, resample=%s',
-                         self.device_index, native_rate, native_channels, read_size, native_rate != SAMPLE_RATE)
-            self.stream = self.pyaudio.open(format=self.pyaudio_module.paFloat32,
-                                            channels=native_channels,
-                                            rate=native_rate,
-                                            input=True,
-                                            input_device_index=self.device_index,
-                                            frames_per_buffer=read_size)
-            self.stream.start_stream()
-            buffer = np.array([], dtype=np.float32)
+                         self.device_index, self.native_rate, self.channels, self.read_size,
+                         self.native_rate != SAMPLE_RATE)
+            with self.cleanup_lock:
+                if self.stopping.is_set() or self.pyaudio_terminated:
+                    return
+                stream = self.pyaudio.open(format=self.pyaudio_module.paFloat32,
+                                           channels=self.channels,
+                                           rate=self.native_rate,
+                                           input=True,
+                                           input_device_index=self.device_index,
+                                           frames_per_buffer=self.read_size,
+                                           stream_callback=self._recording_callback,
+                                           start=False)
+                self.stream = stream
+                if not self.stopping.is_set():
+                    stream.start_stream()
 
-            while self.stream.is_active():
+            while True:
                 try:
-                    in_data = self.stream.read(read_size, exception_on_overflow=False)
-                    audio = np.frombuffer(in_data, dtype=np.float32)
-                    if native_channels > 1:
-                        audio = audio.reshape(-1, native_channels).mean(axis=1)
-                    if native_rate != SAMPLE_RATE:
-                        target_len = int(len(audio) * SAMPLE_RATE / native_rate)
-                        audio = resample(audio, target_len)
-                    buffer = np.concatenate((buffer, audio))
-                    while len(buffer) >= SAMPLES_PER_FRAME:
-                        chunk = buffer[:SAMPLES_PER_FRAME]
-                        buffer = buffer[SAMPLES_PER_FRAME:]
-                        output_queue.put(chunk)
-                except OSError as e:
-                    logger.warning('Audio read error: %s', e)
+                    item = self.recording_queue.get(timeout=0.25)
+                except queue.Empty:
+                    self._log_dropped_blocks()
+                    if self.callback_error is not None:
+                        _, error, _ = self.callback_error
+                        raise RuntimeError(f'PyAudio callback failed: {error}') from error
+                    if self.stopping.is_set():
+                        break
+                    try:
+                        active = stream.is_active()
+                    except Exception as exc:
+                        raise RuntimeError('Unable to query PyAudio stream state') from exc
+                    if not active:
+                        logger.warning('PyAudio stream stopped without an end-of-stream callback')
+                        break
                     continue
+
+                self._log_dropped_blocks()
+                if item is None:
+                    if self.callback_error is not None:
+                        _, error, _ = self.callback_error
+                        raise RuntimeError(f'PyAudio callback failed: {error}') from error
+                    break
+                in_data, status_flags = item
+                if status_flags:
+                    logger.warning('PyAudio recorder returned status=%s', status_flags)
+                audio = np.frombuffer(in_data, dtype=np.float32)
+                audio = _prepare_device_audio(audio, self.native_rate, self.channels, self.gain)
+                if self.debug_dumper is not None:
+                    self.debug_dumper.add(audio)
+                buffer = np.concatenate((buffer, audio))
+                while len(buffer) >= SAMPLES_PER_FRAME:
+                    output_queue.put(buffer[:SAMPLES_PER_FRAME])
+                    buffer = buffer[SAMPLES_PER_FRAME:]
         except Exception:
-            logger.exception('Audio recording error')
+            logger.exception('PyAudio recording error')
         finally:
-            logger.debug('Closing audio device')
-            if self.stream:
-                self.stream.stop_stream()
-                self.stream.close()
-            self.pyaudio.terminate()
-        output_queue.put(None)
+            logger.debug('Closing PyAudio device')
+            self.stopping.set()
+            self._cleanup()
+            if self.debug_dumper is not None:
+                self.debug_dumper.close()
+            output_queue.put(None)
+            self.finished.set()
