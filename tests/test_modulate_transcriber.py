@@ -1,5 +1,4 @@
 import json
-import io
 import queue
 import ssl
 import threading
@@ -213,24 +212,10 @@ class _GatedDisconnectInputQueue:
 
 class ModulateProtocolTest(unittest.TestCase):
 
-    def test_transcript_print_falls_back_to_utf8_bytes_for_legacy_windows_streams(self):
-        class LegacyStream:
-
-            encoding = 'ascii'
-
-            def __init__(self):
-                self.buffer = io.BytesIO()
-
-            def write(self, _value):
-                raise UnicodeEncodeError('ascii', 'テスト', 0, 1, 'unsupported')
-
-            def flush(self):
-                pass
-
-        stream = LegacyStream()
-        with mock.patch('stream_translator_gpt.modulate_transcriber.sys.stdout', stream):
+    def test_transcript_print_uses_shared_utf8_writer(self):
+        with mock.patch('stream_translator_gpt.modulate_transcriber.write_console_utf8') as writer:
             ModulateStreamingTranscriber._print_transcript('テスト。')
-        self.assertEqual(stream.buffer.getvalue().decode('utf-8'), 'テスト。\n')
+        writer.assert_called_once_with('テスト。')
 
     def test_url_encodes_key_and_declares_raw_float_audio(self):
         transcriber = _transcriber()

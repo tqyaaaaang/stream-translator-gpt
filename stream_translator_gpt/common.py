@@ -2,6 +2,7 @@ import ipaddress
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -23,6 +24,26 @@ ENDC = '\033[0m'
 logger = logging.getLogger('main')
 
 
+def write_console_utf8(text: str, *, stream=None) -> None:
+    """Write one line of business output without depending on the console's text encoding."""
+    stream = sys.stdout if stream is None else stream
+    line = text + '\n'
+    try:
+        stream.write(line)
+        stream.flush()
+    except UnicodeEncodeError:
+        binary_stream = getattr(stream, 'buffer', None)
+        if binary_stream is not None:
+            binary_stream.write(line.encode('utf-8'))
+            binary_stream.flush()
+            return
+
+        encoding = getattr(stream, 'encoding', None) or 'ascii'
+        safe_line = line.encode(encoding, errors='backslashreplace').decode(encoding)
+        stream.write(safe_line)
+        stream.flush()
+
+
 class TranslationTask:
 
     class Phase(Enum):
@@ -35,10 +56,19 @@ class TranslationTask:
         self.audio = audio
         self.transcript = None
         self.context_transcripts = None
+        # Translation-context mode snapshots the rolling input state separately from
+        # the state generated for this task. Keeping both on the task makes retries
+        # deterministic and prevents a late response from reading newer state.
+        self.input_translation_context = None
+        self.translation_context = None
         self.translation = None
         self.time_range = time_range
         self.start_time = None
         self.translation_failed = False
+        # Translation API workers and the ordered queue worker use this lock to
+        # linearize result publication against timeout/failure finalization.
+        self._translation_lock = threading.Lock()
+        self._translation_finalized = False
         self.phase = self.Phase.SLICED
 
 

@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from stream_translator_gpt import __version__
 from stream_translator_gpt.logging_utils import (configure_logging, normalize_verbosity_args, redact_command,
                                                  shutdown_logging, verbosity_from_argv)
+from webui.process_utils import build_utf8_subprocess_env, popen_utf8, run_utf8
 
 
 logger = logging.getLogger('main')
@@ -110,7 +111,7 @@ INPUT_KEYS = [
     "prompt_cache_key", "gemini_model", "history_size", "translation_timeout",
     "processing_proxy", "use_json_result", "retry_if_translation_fails", "show_timestamps", "hide_transcription",
     "output_file", "output_proxy", "cqhttp_url", "cqhttp_token", "discord_hook", "telegram_token", "telegram_chat_id",
-    "extra_cli_args", "modulate_api_key", "modulate_partial_cutoff_seconds"
+    "extra_cli_args", "modulate_api_key", "modulate_partial_cutoff_seconds", "use_translation_context"
 ]
 
 
@@ -322,7 +323,8 @@ def build_translator_command(
         modulate_partial_cutoff_seconds=10.0,
         openai_translation_api='auto',
         openai_prompt_cache=False,
-        prompt_cache_key=None):
+        prompt_cache_key=None,
+        use_translation_context=False):
     cmd = [sys.executable, "-u", "-m", "stream_translator_gpt"]
 
     def add_arg(flag, value, default_key=None):
@@ -477,6 +479,9 @@ def build_translator_command(
         add_arg("--translation-history-size", int(history_size), "history_size")
         add_arg("--translation-timeout", int(translation_timeout), "translation_timeout")
 
+        if use_translation_context:
+            cmd.append("--use-translation-context")
+
         if use_json_result:
             cmd.append("--use-json-result")
         if retry_if_translation_fails:
@@ -522,18 +527,11 @@ def build_translator_command(
 
 def get_subprocess_env():
     """
-    Prepare environment with project root in PYTHONPATH to ensure the child process
-    can attempt to find the 'stream_translator_gpt' package even if not installed.
+    Prepare a UTF-8 child environment with the source tree in PYTHONPATH when available.
     """
-    env = os.environ.copy()
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
-
-    # Check if we are likely in the source tree (parent has the package)
-    if os.path.isdir(os.path.join(project_root, "stream_translator_gpt")):
-        # Append project_root to PYTHONPATH
-        env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
-    return env
+    return build_utf8_subprocess_env(project_root)
 
 
 def run_translator(
@@ -601,7 +599,8 @@ def run_translator(
         modulate_partial_cutoff_seconds,
         openai_translation_api,
         openai_prompt_cache,
-        prompt_cache_key):
+        prompt_cache_key,
+        use_translation_context=False):
     global process, is_running
 
     if is_running:
@@ -688,7 +687,8 @@ def run_translator(
                                           modulate_partial_cutoff_seconds=modulate_partial_cutoff_seconds,
                                           openai_translation_api=openai_translation_api,
                                           openai_prompt_cache=openai_prompt_cache,
-                                          prompt_cache_key=prompt_cache_key)
+                                          prompt_cache_key=prompt_cache_key,
+                                          use_translation_context=use_translation_context)
 
     if error:
         yield error
@@ -701,13 +701,12 @@ def run_translator(
 
     try:
         logger.info("Starting translator subprocess")
-        process = subprocess.Popen(cmd,
-                                   stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT,
-                                   text=True,
-                                   bufsize=1,
-                                   env=get_subprocess_env(),
-                                   creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+        process = popen_utf8(cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            bufsize=1,
+                            env=get_subprocess_env(),
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
         logger.info("Translator subprocess started with PID %s", process.pid)
 
         # Read output in a non-blocking way for the generator
@@ -760,7 +759,7 @@ def run_list_formats(url, cookies, input_proxy):
     try:
         logger.info("Listing available stream formats")
         # This might take a while, so UI might freeze slightly, but it's okay for a button click
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=get_subprocess_env())
+        result = run_utf8(cmd, capture_output=True, check=True, env=get_subprocess_env())
         logger.info("Finished listing available stream formats")
         return result.stdout
     except subprocess.CalledProcessError as e:
@@ -1006,6 +1005,11 @@ with gr.Blocks() as demo:
                                              label=i18n.get("history_size"))
                     translation_timeout = gr.Number(value=get_default("translation_timeout"), label=i18n.get("timeout"))
 
+                use_translation_context = gr.Checkbox(
+                    label=i18n.get("use_translation_context"),
+                    value=get_default("use_translation_context"),
+                    info=i18n.get("use_translation_context_info"))
+
                 use_json_result = gr.Checkbox(label=i18n.get("use_json_result"), value=get_default("use_json_result"))
                 retry_if_translation_fails = gr.Checkbox(label=i18n.get("retry_on_failure"),
                                                          value=get_default("retry_if_translation_fails"))
@@ -1205,7 +1209,7 @@ with gr.Blocks() as demo:
                         discord_hook, telegram_token, telegram_chat_id, extra_cli_args, openai_key_trans,
                         openai_base_url_trans, device_audio_getter, device_multiplier, local_file_mode,
                         modulate_api_key, modulate_partial_cutoff_seconds, openai_translation_api,
-                        openai_prompt_cache, prompt_cache_key
+                        openai_prompt_cache, prompt_cache_key, use_translation_context
                     ],
                     outputs=output_box,
                     concurrency_limit=1,

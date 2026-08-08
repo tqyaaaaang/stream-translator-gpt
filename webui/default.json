@@ -43,6 +43,7 @@
     "openai_base_url": "",
     "google_base_url": "",
     "history_size": 3,
+    "use_translation_context": false,
     "translation_timeout": 10,
     "processing_proxy": "",
     "use_json_result": false,

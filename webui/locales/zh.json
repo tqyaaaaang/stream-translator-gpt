@@ -80,6 +80,8 @@
     "gemini_base_url": "Google Base URL",
     "gemini_base_url_ph": "https://generativelanguage.googleapis.com",
     "history_size": "历史记录大小",
+    "use_translation_context": "滚动翻译 Context",
+    "use_translation_context_info": "同时返回当前译文和不超过 100 个 Unicode 字符的长程 Context；它应跨越近期原始 Reference，保留更高层的主题、活动、实体和未解决状态，而不是复述最近几句。",
     "timeout": "超时 (秒)",
     "use_json_result": "使用 JSON 结果",
     "retry_on_failure": "失败重试",

@@ -221,6 +221,10 @@ class Config:
     """The number of previous transcripts sent as context when calling the LLM API. It is recommended to disable
     context (set to 0) for weaker models."""
 
+    use_translation_context: bool = False
+    """Maintain a rolling LLM-generated summary and return it alongside each translation. When enabled, translation
+    requests are processed sequentially so every request can use the preceding request's context."""
+
     translation_timeout: int = 10
     """If the GPT / Gemini translation exceeds this number of seconds, the translation will be discarded."""
 
@@ -428,6 +432,7 @@ def run(config: Config):
                 'prompt': config.translation_prompt,
                 'history_size': config.translation_history_size,
                 'use_json_result': config.use_json_result,
+                'use_translation_context': config.use_translation_context,
                 'timeout': config.translation_timeout,
                 'retry_if_translation_fails': config.retry_if_translation_fails,
                 'debug_mode': config.debug_mode,
@@ -693,6 +698,9 @@ def _validate_and_normalize(config: Config):
 
     if config.translation_prompt and not (config.openai_api_key or config.google_api_key):
         logger.error('Please fill in the OpenAI / Google API key when enabling LLM translation')
+        sys.exit(1)
+    if config.use_translation_context and not config.translation_prompt:
+        logger.error('--use-translation-context requires --translation-prompt')
         sys.exit(1)
     if config.translation_prompt and not config.google_api_key and config.openai_prompt_cache:
         if config.openai_translation_api != 'responses':

@@ -9,7 +9,7 @@ from scipy.io.wavfile import write as write_audio
 import numpy as np
 
 from . import filters
-from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, LogTime, sec2str, ClientPool
+from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, LogTime, sec2str, ClientPool, write_console_utf8
 from .simul_streaming.simul_whisper.whisper.utils import compression_ratio
 
 # Application-level bound for one history result; prompt builders reserve space for keywords as needed.
@@ -141,9 +141,9 @@ class AudioTranscriber(LoopWorkerBase):
             if self.print_result:
                 if self.output_timestamps:
                     timestamp_text = f'{sec2str(task.time_range[0])} --> {sec2str(task.time_range[1])}'
-                    print(timestamp_text + ' ' + task.transcript)
+                    write_console_utf8(timestamp_text + ' ' + task.transcript)
                 else:
-                    print(task.transcript)
+                    write_console_utf8(task.transcript)
             output_queue.put(task)
 
 

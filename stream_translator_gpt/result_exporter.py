@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from .common import TranslationTask, LoopWorkerBase, sec2str, start_daemon_thread, BOLD, ENDC
+from .common import TranslationTask, LoopWorkerBase, sec2str, start_daemon_thread, BOLD, ENDC, write_console_utf8
 
 
 logger = logging.getLogger('main')
@@ -14,6 +14,13 @@ logger = logging.getLogger('main')
 def _log_http_status(channel: str, status_code: int):
     level = logging.WARNING if status_code >= 400 else logging.DEBUG
     logger.log(level, '%s export returned HTTP status %s', channel, status_code)
+
+
+def _format_translation_result(task: TranslationTask) -> str:
+    """Render context-mode results distinctly without changing normal output."""
+    if task.translation_context is None:
+        return task.translation
+    return f'[Translation]\n{task.translation}\n[Context]\n{task.translation_context}'
 
 
 class ResultExporter(LoopWorkerBase):
@@ -121,12 +128,13 @@ class ResultExporter(LoopWorkerBase):
             if self.output_timestamps:
                 text_to_send = timestamp_text + '\n' + text_to_send
             if task.translation:
-                text_to_print = task.translation
+                formatted_translation = _format_translation_result(task)
+                text_to_print = formatted_translation
                 if self.output_timestamps:
                     text_to_print = timestamp_text + ' ' + text_to_print
                 text_to_print = text_to_print.strip()
-                print(f'{BOLD}{text_to_print}{ENDC}')
-                text_to_send += task.translation
+                write_console_utf8(f'{BOLD}{text_to_print}{ENDC}')
+                text_to_send += formatted_translation
             text_to_send = text_to_send.strip()
             if self.cqhttp_queue:
                 self.cqhttp_queue.put(text_to_send)

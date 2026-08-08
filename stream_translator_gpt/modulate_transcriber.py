@@ -5,7 +5,6 @@ import math
 import queue
 import socket
 import ssl
-import sys
 import threading
 import time
 from collections import deque
@@ -14,7 +13,7 @@ from urllib.parse import quote, quote_plus, urlencode
 import numpy as np
 
 from .audio_transcriber import AudioTranscriber
-from .common import SAMPLE_RATE, TranslationTask, sec2str
+from .common import SAMPLE_RATE, TranslationTask, sec2str, write_console_utf8
 
 
 logger = logging.getLogger('main')
@@ -360,22 +359,7 @@ class ModulateStreamingTranscriber(AudioTranscriber):
 
     @staticmethod
     def _print_transcript(text: str):
-        line = text + '\n'
-        try:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-        except UnicodeEncodeError:
-            # Some Windows shells expose a legacy stdout encoding even when the
-            # surrounding pipe consumes UTF-8. Keep business output from taking
-            # down the streaming connection in that environment.
-            binary_stream = getattr(sys.stdout, 'buffer', None)
-            if binary_stream is None:
-                encoding = getattr(sys.stdout, 'encoding', None) or 'ascii'
-                sys.stdout.write(line.encode(encoding, errors='backslashreplace').decode(encoding))
-                sys.stdout.flush()
-                return
-            binary_stream.write(line.encode('utf-8'))
-            binary_stream.flush()
+        write_console_utf8(text)
 
     def _emit_task(self, text: str, start: float, end: float, output_queue):
         text = self.filter_text(text).strip()

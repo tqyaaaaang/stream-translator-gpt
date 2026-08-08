@@ -80,6 +80,8 @@
     "gemini_base_url": "Google Base URL",
     "gemini_base_url_ph": "https://generativelanguage.googleapis.com",
     "history_size": "History Size",
+    "use_translation_context": "Rolling Translation Context",
+    "use_translation_context_info": "Return both the current translation and a long-horizon Context of at most 100 Unicode characters. It tracks the broader topic, activity, entities, and unresolved state beyond the recent raw Reference transcripts instead of restating them.",
     "timeout": "Timeout (s)",
     "use_json_result": "Use JSON Result",
     "retry_on_failure": "Retry on Failure",
