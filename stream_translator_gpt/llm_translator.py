@@ -147,6 +147,7 @@ class LLMTranslator(LoopWorkerBase):
                 self.processing_queue[0].translation or _is_task_timeout(self.processing_queue[0], self.timeout) or
             (self.processing_queue[0].translation_failed and not self.retry_if_translation_fails)):
             task = self.processing_queue.popleft()
+            task.phase = TranslationTask.Phase.TRANSLATED
             if not task.translation:
                 if _is_task_timeout(task, self.timeout):
                     logger.error('Translation timed out after %ss', self.timeout)

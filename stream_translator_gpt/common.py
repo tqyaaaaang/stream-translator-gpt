@@ -5,6 +5,7 @@ import re
 import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from enum import Enum
 from urllib.parse import urlparse
 
 import numpy as np
@@ -23,7 +24,13 @@ logger = logging.getLogger('main')
 
 class TranslationTask:
 
-    def __init__(self, audio: np.array, time_range: tuple[float, float]):
+    class Phase(Enum):
+        SLICED = 1
+        TRANSCRIBED = 2
+        TRANSLATED = 3
+
+    def __init__(self, line_id: int, audio: np.array, time_range: tuple[float, float]):
+        self.id = line_id
         self.audio = audio
         self.transcript = None
         self.context_transcripts = None
@@ -31,6 +38,7 @@ class TranslationTask:
         self.time_range = time_range
         self.start_time = None
         self.translation_failed = False
+        self.phase = self.Phase.SLICED
 
 
 class LoopWorkerBase(ABC):

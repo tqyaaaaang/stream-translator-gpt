@@ -134,6 +134,7 @@ class AudioTranscriber(LoopWorkerBase):
                 logger.warning('Skipping empty transcription from %s to %s', sec2str(task.time_range[0]),
                                sec2str(task.time_range[1]))
                 continue
+            task.phase = TranslationTask.Phase.TRANSCRIBED
             previous_text = "" if is_repetitive else task.transcript
             if self.print_result:
                 if self.output_timestamps:

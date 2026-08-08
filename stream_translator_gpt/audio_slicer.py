@@ -82,6 +82,7 @@ class AudioSlicer(LoopWorkerBase):
         self.continuous_no_speech_count = 0
         self.counter = 0
         self.last_slice_second = 0.0
+        self.slice_count = 0
 
         self.vad = VAD()
         self.vad_threshold = vad_threshold
@@ -171,7 +172,8 @@ class AudioSlicer(LoopWorkerBase):
             if self.should_slice():
                 sliced_audio, time_range = self.slice()
                 logger.info('slicer decided to slice %s to %s', sec2str(time_range[0]), sec2str(time_range[1]))
-                task = TranslationTask(sliced_audio, time_range)
+                self.slice_count += 1
+                task = TranslationTask(self.slice_count, sliced_audio, time_range)
                 output_queue.put(task)
             if self.counter % vad_reset_interval == 0:
                 logger.debug('Resetting VAD state after %d audio frames', self.counter)
