@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import threading
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
@@ -46,6 +47,31 @@ class LoopWorkerBase(ABC):
     @abstractmethod
     def loop(self):
         pass
+
+
+class LogTime:
+    """Log elapsed wall-clock duration without work when the level is disabled."""
+
+    def __init__(self, text: str, *args, level=logging.INFO):
+        self.text = text
+        self.args = args
+        self.level = level
+        self.start_time = None
+
+    def set_log(self, text: str, *args) -> None:
+        self.text = text
+        self.args = args
+
+    def __enter__(self):
+        if logger.isEnabledFor(self.level):
+            self.start_time = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.start_time is not None and self.text:
+            duration_ms = (time.perf_counter() - self.start_time) * 1000
+            logger.log(self.level, self.text + ', run in time %.2fms', *self.args, duration_ms)
+        return False
 
 
 def start_daemon_thread(func, *args, name=None, **kwargs):

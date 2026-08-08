@@ -8,7 +8,7 @@ from abc import abstractmethod
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
-from .common import TranslationTask, LoopWorkerBase, ClientPool
+from .common import TranslationTask, LoopWorkerBase, ClientPool, LogTime
 
 
 logger = logging.getLogger('main')
@@ -124,9 +124,15 @@ class LLMTranslator(LoopWorkerBase):
         if not translation_task.start_time:
             translation_task.start_time = datetime.now(timezone.utc)
         translation_task.translation_failed = False
-        thread = threading.Thread(target=self.translate, name='translator-instance', args=(translation_task,))
+        thread = threading.Thread(target=self._translate_with_timing,
+                                  name=f'translator-instance-{translation_task.id}',
+                                  args=(translation_task,))
         thread.daemon = True
         thread.start()
+
+    def _translate_with_timing(self, translation_task: TranslationTask):
+        with LogTime('Translated task %d', translation_task.id):
+            self.translate(translation_task)
 
     def _retrigger_failed_tasks(self):
         now = datetime.now(timezone.utc)

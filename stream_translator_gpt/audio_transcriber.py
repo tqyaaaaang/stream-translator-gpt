@@ -9,7 +9,7 @@ from scipy.io.wavfile import write as write_audio
 import numpy as np
 
 from . import filters
-from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, sec2str, ClientPool
+from .common import TranslationTask, SAMPLE_RATE, LoopWorkerBase, LogTime, sec2str, ClientPool
 from .simul_streaming.simul_whisper.whisper.utils import compression_ratio
 
 # Application-level bound for one history result; prompt builders reserve space for keywords as needed.
@@ -108,7 +108,9 @@ class AudioTranscriber(LoopWorkerBase):
 
             logger.debug('Transcribing audio from %s to %s (%d samples)', sec2str(task.time_range[0]),
                          sec2str(task.time_range[1]), len(task.audio))
-            text, tokens = self.transcribe(task.audio, history_context=history_context)
+            with LogTime('Transcribed task %d from %s to %s', task.id, sec2str(task.time_range[0]),
+                         sec2str(task.time_range[1])):
+                text, tokens = self.transcribe(task.audio, history_context=history_context)
             logger.debug('Transcription completed for audio from %s to %s', sec2str(task.time_range[0]),
                          sec2str(task.time_range[1]))
 

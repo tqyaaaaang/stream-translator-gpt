@@ -8,7 +8,8 @@ import warnings
 
 import numpy as np
 
-from .common import TranslationTask, SAMPLE_RATE, FRAME_DURATION, LoopWorkerBase, sec2str
+from .common import TranslationTask, SAMPLE_RATE, FRAME_DURATION, LoopWorkerBase, LogTime, sec2str
+from .logging_utils import DDEBUG
 
 warnings.filterwarnings('ignore')
 
@@ -104,7 +105,9 @@ class AudioSlicer(LoopWorkerBase):
 
     def put(self, audio: np.array):
         self.counter += 1
-        speech_prob = self.vad.get_speech_prob(audio)
+        with LogTime('', level=DDEBUG) as log_time:
+            speech_prob = self.vad.get_speech_prob(audio)
+            log_time.set_log('VAD evaluated block %d with speech probability %.4f', self.counter, speech_prob)
         is_speech = speech_prob > (self.vad_neg_threshold if self.speech_count else self.vad_threshold)
         if is_speech:
             self.audio_buffer.append(audio)
