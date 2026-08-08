@@ -22,7 +22,7 @@ from .common import ClientPool, SAMPLE_RATE, SAMPLES_PER_FRAME, start_daemon_thr
 from .audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAudioGetter, StreamAudioGetter
 from .audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
 from .modulate_transcriber import MODULATE_REPLAY_SECONDS, ModulateStreamingTranscriber
-from .llm_translator import GPTTranslator, GeminiTranslator
+from .llm_translator import GPTTranslator, GeminiTranslator, _gpt_model_version
 from .result_exporter import ResultExporter
 from .logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
 from . import __version__
@@ -204,6 +204,11 @@ class Config:
     gpt_model: str = 'gpt-5.6-luna'
     """OpenAI's GPT model name, gpt-5.4-nano / gpt-5.4-mini / gpt-5.6-luna / gpt-5.6-terra."""
 
+    openai_translation_api: Literal['auto', 'responses', 'chat-completions'] = 'auto'
+    """OpenAI translation generation API. Auto uses Responses for OpenAI and Chat Completions for a custom
+    --openai-base-url, preserving compatibility with older OpenAI-compatible endpoints. Select responses explicitly
+    when a custom endpoint implements /v1/responses."""
+
     gemini_model: str = 'gemini-3.5-flash-lite'
     """Google's Gemini model name, gemini-3-flash-preview / gemini-3.1-flash-lite / gemini-3.5-flash /
     gemini-3.5-flash-lite / gemini-3.6-flash."""
@@ -236,7 +241,12 @@ class Config:
     """Gemini parameter. Limits token selection to the top K most probable candidates."""
 
     prompt_cache_key: str | None = None
-    """GPT parameter. If set, enables prompt caching optimization on the API side."""
+    """Optional stable OpenAI prompt-cache routing key. It can improve implicit cache routing on its own; when
+    --openai-prompt-cache is enabled it overrides the key derived from the model and translation instructions."""
+
+    openai_prompt_cache: bool = False
+    """Enable GPT-5.6 explicit prompt caching for the complete, stable translation instructions. Transcript text and
+    history remain outside the cached prefix. OpenAI only caches eligible prefixes of at least 1024 tokens."""
 
     reasoning_effort: str | None = None
     """GPT parameter. Controls reasoning depth for reasoning models. Options: none / minimal / low / medium / high /
@@ -436,6 +446,8 @@ def run(config: Config):
                 return GPTTranslator(
                     model=config.gpt_model,
                     prompt_cache_key=config.prompt_cache_key,
+                    prompt_cache_enabled=config.openai_prompt_cache,
+                    api_mode=config.openai_translation_api,
                     temperature=config.temperature,
                     top_p=config.top_p,
                     reasoning_effort=config.reasoning_effort,
@@ -599,6 +611,10 @@ def _check_ffmpeg(config: Config):
 
 def _validate_and_normalize(config: Config):
     """Check option combinations and normalize values, exiting with an error message on invalid input."""
+    if config.openai_translation_api == 'auto':
+        config.openai_translation_api = 'chat-completions' if config.openai_base_url else 'responses'
+        logger.info('Resolved OpenAI translation API mode to %s', config.openai_translation_api)
+
     if config.model.endswith('.en'):
         if config.model == 'large.en':
             logger.error('English model does not have large model, please choose from '
@@ -678,6 +694,15 @@ def _validate_and_normalize(config: Config):
     if config.translation_prompt and not (config.openai_api_key or config.google_api_key):
         logger.error('Please fill in the OpenAI / Google API key when enabling LLM translation')
         sys.exit(1)
+    if config.translation_prompt and not config.google_api_key and config.openai_prompt_cache:
+        if config.openai_translation_api != 'responses':
+            logger.error('OpenAI explicit prompt caching requires --openai-translation-api responses')
+            sys.exit(1)
+        model_version = _gpt_model_version(config.gpt_model)
+        if model_version is not None and model_version < (5, 6):
+            logger.error('OpenAI explicit prompt caching requires GPT-5.6 or newer; selected model is %s',
+                         config.gpt_model)
+            sys.exit(1)
 
     if config.language == 'auto':
         config.language = None

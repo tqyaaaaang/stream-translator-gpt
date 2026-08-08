@@ -106,7 +106,8 @@ INPUT_KEYS = [
     "openai_transcription_model", "vad_threshold", "min_audio_len", "max_audio_len", "target_audio_len",
     "silence_threshold", "dynamic_vad_threshold", "dynamic_no_speech_threshold", "prefix_retention_len", "filter_emoji",
     "filter_repetition", "filter_language_based", "transcription_context", "transcription_keywords",
-    "translation_prompt", "translation_provider", "gpt_model", "gemini_model", "history_size", "translation_timeout",
+    "translation_prompt", "translation_provider", "gpt_model", "openai_translation_api", "openai_prompt_cache",
+    "prompt_cache_key", "gemini_model", "history_size", "translation_timeout",
     "processing_proxy", "use_json_result", "retry_if_translation_fails", "show_timestamps", "hide_transcription",
     "output_file", "output_proxy", "cqhttp_url", "cqhttp_token", "discord_hook", "telegram_token", "telegram_chat_id",
     "extra_cli_args", "modulate_api_key", "modulate_partial_cutoff_seconds"
@@ -318,7 +319,10 @@ def build_translator_command(
         device_multiplier=1.0,
         local_file_mode='offline',
         modulate_api_key=None,
-        modulate_partial_cutoff_seconds=10.0):
+        modulate_partial_cutoff_seconds=10.0,
+        openai_translation_api='auto',
+        openai_prompt_cache=False,
+        prompt_cache_key=None):
     cmd = [sys.executable, "-u", "-m", "stream_translator_gpt"]
 
     def add_arg(flag, value, default_key=None):
@@ -462,6 +466,11 @@ def build_translator_command(
 
         if translation_provider == "GPT":
             add_arg("--gpt-model", gpt_model, "gpt_model")
+            add_arg("--openai-translation-api", openai_translation_api, "openai_translation_api")
+            if openai_prompt_cache:
+                cmd.append("--openai-prompt-cache")
+            if prompt_cache_key:
+                cmd.extend(["--prompt-cache-key", prompt_cache_key])
         elif translation_provider == "Gemini":
             add_arg("--gemini-model", gemini_model, "gemini_model")
 
@@ -589,7 +598,10 @@ def run_translator(
         device_multiplier,
         local_file_mode,
         modulate_api_key,
-        modulate_partial_cutoff_seconds):
+        modulate_partial_cutoff_seconds,
+        openai_translation_api,
+        openai_prompt_cache,
+        prompt_cache_key):
     global process, is_running
 
     if is_running:
@@ -673,7 +685,10 @@ def run_translator(
                                           device_multiplier=device_multiplier,
                                           local_file_mode=local_file_mode,
                                           modulate_api_key=modulate_api_key,
-                                          modulate_partial_cutoff_seconds=modulate_partial_cutoff_seconds)
+                                          modulate_partial_cutoff_seconds=modulate_partial_cutoff_seconds,
+                                          openai_translation_api=openai_translation_api,
+                                          openai_prompt_cache=openai_prompt_cache,
+                                          prompt_cache_key=prompt_cache_key)
 
     if error:
         yield error
@@ -948,6 +963,21 @@ with gr.Blocks() as demo:
                                             value=get_default("gpt_model"),
                                             allow_custom_value=True)
 
+                    with gr.Row():
+                        openai_translation_api = gr.Dropdown(
+                            ["auto", "responses", "chat-completions"],
+                            label=i18n.get("openai_translation_api"),
+                            value=get_default("openai_translation_api"),
+                            info=i18n.get("openai_translation_api_info"))
+                        openai_prompt_cache = gr.Checkbox(label=i18n.get("openai_prompt_cache"),
+                                                          value=get_default("openai_prompt_cache"),
+                                                          info=i18n.get("openai_prompt_cache_info"))
+                    prompt_cache_key = gr.Textbox(label=i18n.get("prompt_cache_key"),
+                                                  value=get_default("prompt_cache_key"),
+                                                  placeholder=i18n.get("prompt_cache_key_ph"),
+                                                  info=i18n.get("prompt_cache_key_info"),
+                                                  elem_id="prompt-cache-key-translation")
+
                 with gr.Group(visible=False) as gemini_group:
                     with gr.Row():
                         google_key = gr.Textbox(label=i18n.get("google_api_key"),
@@ -1150,7 +1180,8 @@ with gr.Blocks() as demo:
             [8, "openai-key-translation"],
             [35, "openai-base-url-translation"],
             [37, "processing-proxy-translation"],
-            [55, "modulate-api-key"]
+            [55, "modulate-api-key"],
+            [59, "prompt-cache-key-translation"]
         ];
         for (const [index, id] of currentValues) {
             const input = document.querySelector(`#${id} input, #${id} textarea`);
@@ -1173,7 +1204,8 @@ with gr.Blocks() as demo:
                         show_timestamps, hide_transcription, output_file, output_proxy, cqhttp_url, cqhttp_token,
                         discord_hook, telegram_token, telegram_chat_id, extra_cli_args, openai_key_trans,
                         openai_base_url_trans, device_audio_getter, device_multiplier, local_file_mode,
-                        modulate_api_key, modulate_partial_cutoff_seconds
+                        modulate_api_key, modulate_partial_cutoff_seconds, openai_translation_api,
+                        openai_prompt_cache, prompt_cache_key
                     ],
                     outputs=output_box,
                     concurrency_limit=1,

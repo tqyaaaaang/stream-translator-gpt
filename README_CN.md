@@ -219,6 +219,7 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--transcription-context`          |                                | 启用转录中的上下文传递，只保留上一条结果；SimulStreaming 和 HuggingFace ASR 不支持文本上下文（默认关闭）。                                                                    |
 | **翻译选项**                       |
 | `--gpt-model`                      | gpt-5.6-luna                   | OpenAI 的 GPT 模型名，gpt-5.4-nano / gpt-5.4-mini / gpt-5.6-luna / gpt-5.6-terra                                                                                              |
+| `--openai-translation-api`         | auto                           | OpenAI 翻译 API 模式：auto / responses / chat-completions。`auto` 对 OpenAI 官方端点使用 Responses；设置 `--openai-base-url` 时使用 Chat Completions。若自定义端点实现了 `/v1/responses`，请显式选择 `responses`。 |
 | `--gemini-model`                   | gemini-3.5-flash-lite          | Google 的 Gemini 模型名，gemini-3-flash-preview / gemini-3.1-flash-lite / gemini-3.5-flash / gemini-3.5-flash-lite / gemini-3.6-flash                                         |
 | `--translation-prompt`             |                                | 设置后，将通过 GPT / Gemini API 把结果文本翻译为目标语言（根据填写的 API key 自动选择）。示例："将日语翻译为中文"。在 prompt 中补充背景（主播是谁、直播内容）可提升翻译质量。 |
 | `--translation-history-size`       | 3                              | 调用 LLM API 时作为上下文发送的历史转录条数。对较弱的模型建议禁用上下文（设为 0）。                                                                                           |
@@ -228,7 +229,8 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--temperature`                    |                                | GPT/Gemini 参数。控制输出随机性，值越高结果越多样。                                                                                                                           |
 | `--top-p`                          |                                | GPT/Gemini 参数。核采样阈值，只考虑累计概率超过此值的 token。                                                                                                                 |
 | `--top-k`                          |                                | Gemini 参数。将 token 选择限制在概率最高的 K 个候选之内。                                                                                                                     |
-| `--prompt-cache-key`               |                                | GPT 参数。设置后在 API 侧启用 prompt 缓存优化。                                                                                                                               |
+| `--openai-prompt-cache`            |                                | 在 Responses 模式中选择启用 GPT-5.6 显式 prompt 缓存。缓存断点位于完整且稳定的系统指令之后；动态历史和当前转录文本位于断点之后。少于 1,024 tokens 的前缀不会被缓存，并会输出 warning。 |
+| `--prompt-cache-key`               |                                | 可选的 prompt 缓存路由 key。未启用 `--openai-prompt-cache` 时仍会发送，以供隐式缓存路由；启用显式缓存时，它会覆盖根据模型和完整系统指令派生的稳定 key。                         |
 | `--reasoning-effort`               | 自动（最低支持级别）           | GPT 参数。控制推理模型的推理深度。可选：none / minimal / low / medium / high / xhigh / max。                                                                                  |
 | `--verbosity`                      |                                | GPT 参数。控制回复的详细程度。可选：low / medium / high。                                                                                                                     |
 | `--service-tier`                   |                                | GPT 参数。指定处理优先级层级。可选：auto / default / flex / priority。                                                                                                        |
