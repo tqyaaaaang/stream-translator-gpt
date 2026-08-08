@@ -217,6 +217,26 @@ class ModulateProtocolTest(unittest.TestCase):
             ModulateStreamingTranscriber._print_transcript('テスト。')
         writer.assert_called_once_with('テスト。')
 
+    def test_filtered_empty_segment_does_not_emit_empty_transcription_warning(self):
+        transcriber = _transcriber(transcription_filters='emoji_filter')
+        output_queue = queue.SimpleQueue()
+
+        with self.assertLogs('main', level='DEBUG') as captured:
+            transcriber._emit_task('😀', 0.0, 0.032, output_queue)
+
+        self.assertIn('DEBUG:main:Skipping Modulate transcription segment removed by filters', captured.output)
+        self.assertNotIn('WARNING:main:Skipping empty Modulate transcription segment', captured.output)
+        with self.assertRaises(queue.Empty):
+            output_queue.get_nowait()
+
+    def test_source_empty_segment_keeps_empty_transcription_warning(self):
+        transcriber = _transcriber()
+
+        with self.assertLogs('main', level='WARNING') as captured:
+            transcriber._emit_task('   ', 0.0, 0.032, queue.SimpleQueue())
+
+        self.assertEqual(captured.output, ['WARNING:main:Skipping empty Modulate transcription segment'])
+
     def test_url_encodes_key_and_declares_raw_float_audio(self):
         transcriber = _transcriber()
         parsed = urlsplit(transcriber._connection_url())

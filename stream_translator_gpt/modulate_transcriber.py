@@ -362,9 +362,13 @@ class ModulateStreamingTranscriber(AudioTranscriber):
         write_console_utf8(text)
 
     def _emit_task(self, text: str, start: float, end: float, output_queue):
+        had_source_text = bool(text.strip())
         text = self.filter_text(text).strip()
         if not text:
-            logger.warning('Skipping empty Modulate transcription segment')
+            if had_source_text:
+                logger.debug('Skipping Modulate transcription segment removed by filters')
+            else:
+                logger.warning('Skipping empty Modulate transcription segment')
             return
 
         start = max(float(start), self.last_task_end)
