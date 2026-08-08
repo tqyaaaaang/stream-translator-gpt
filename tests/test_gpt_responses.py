@@ -7,7 +7,7 @@ import numpy as np
 import tyro
 
 from stream_translator_gpt.common import ClientPool, TranslationTask
-from stream_translator_gpt.llm_translator import GPTTranslator
+from stream_translator_gpt.llm_translator import GPTTranslator, _parse_json_completion
 from stream_translator_gpt.main import Config, _validate_and_normalize
 
 
@@ -37,6 +37,17 @@ class _FakeChatCompletions:
 
 
 class GPTResponsesTranslatorTest(unittest.TestCase):
+
+    def test_legacy_json_parser_preserves_compatible_model_fallbacks(self):
+        self.assertEqual(_parse_json_completion('plain translation'), 'plain translation')
+        self.assertEqual(
+            _parse_json_completion('{"translation":"译文","metadata":"ignored"}'),
+            '译文',
+        )
+        self.assertEqual(
+            _parse_json_completion('{"translation":"他说"你好""}'),
+            '他说"你好"',
+        )
 
     @staticmethod
     def _translator(**overrides):

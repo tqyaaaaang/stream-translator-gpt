@@ -215,7 +215,8 @@ class Config:
 
     translation_prompt: str | None = None
     """If set, will translate result text to target language via GPT / Gemini API. Example: "Translate from Japanese
-    to Chinese". Adding context (who the streamer is, what the stream is about) improves translation quality."""
+    to Chinese". Adding context (who the streamer is, what the stream is about) improves translation quality. Output
+    formatting is controlled internally; use this prompt for translation content, terminology, background and style."""
 
     translation_history_size: int = 3
     """The number of previous transcripts sent as context when calling the LLM API. It is recommended to disable

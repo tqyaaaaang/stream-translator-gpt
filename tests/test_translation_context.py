@@ -16,7 +16,9 @@ from stream_translator_gpt.llm_translator import (
     GPTTranslator,
     LLMTranslator,
     TRANSLATION_CONTEXT_MAX_CHARS,
+    TRANSLATION_CONTEXT_MIN_CHARS,
     _parse_translation_context_completion,
+    _translation_context_target_min_chars,
 )
 from stream_translator_gpt.main import Config, _validate_and_normalize
 from stream_translator_gpt.result_exporter import ResultExporter, _format_translation_result
@@ -87,7 +89,7 @@ class TranslationContextTest(unittest.TestCase):
 
         system_prompt, user_content = translator._build_messages(task)
 
-        self.assertIn('protocol overrides every other output-format instruction', system_prompt)
+        self.assertIn('Application output protocol (mandatory)', system_prompt)
         self.assertIn('"Context" is long-horizon memory', system_prompt)
         self.assertIn('"Reference" contains the recent source-language transcripts', system_prompt)
         self.assertIn('"Translate" is the current source-language utterance', system_prompt)
@@ -98,8 +100,11 @@ class TranslationContextTest(unittest.TestCase):
         self.assertIn('unresolved referents or decisions', system_prompt)
         self.assertIn('Do not restate transient local details', system_prompt)
         self.assertIn('when the topic has not genuinely changed', system_prompt)
-        self.assertIn('aim for 60-100 Unicode characters', system_prompt)
-        self.assertIn('hard maximum is 100', system_prompt)
+        self.assertIn(
+            f'Aim for {TRANSLATION_CONTEXT_MIN_CHARS}-{TRANSLATION_CONTEXT_MAX_CHARS} Unicode characters',
+            system_prompt,
+        )
+        self.assertIn(f'hard maximum is {TRANSLATION_CONTEXT_MAX_CHARS}', system_prompt)
         self.assertIn('Never invent unsupported facts', system_prompt)
         self.assertEqual(
             user_content,
@@ -107,6 +112,43 @@ class TranslationContextTest(unittest.TestCase):
             '**Reference:**\n> 前の文1\n> 前の文2\n\n'
             '**Translate:**\n今の文',
         )
+
+    def test_context_target_minimum_is_half_of_maximum_rounded_up(self):
+        self.assertEqual(TRANSLATION_CONTEXT_MIN_CHARS,
+                         (TRANSLATION_CONTEXT_MAX_CHARS + 1) // 2)
+        self.assertEqual(_translation_context_target_min_chars(50), 25)
+        self.assertEqual(_translation_context_target_min_chars(100), 50)
+        self.assertEqual(_translation_context_target_min_chars(101), 51)
+        with self.assertRaises(ValueError):
+            _translation_context_target_min_chars(0)
+
+    def test_same_runtime_prompt_uses_hardcoded_output_protocol_for_every_mode(self):
+        shared_prompt = 'Translate faithfully using the supplied terminology.'
+        task = self._task()
+        translators = {
+            'plain': self._translator(prompt=shared_prompt, history_size=0,
+                                      use_translation_context=False, use_json_result=False),
+            'json': self._translator(prompt=shared_prompt, history_size=0,
+                                     use_translation_context=False, use_json_result=True),
+            'context': self._translator(prompt=shared_prompt, history_size=0,
+                                        use_translation_context=True, use_json_result=False),
+            'context_with_json_flag': self._translator(prompt=shared_prompt, history_size=0,
+                                                       use_translation_context=True, use_json_result=True),
+        }
+
+        prompts = {name: translator._build_messages(task)[0] for name, translator in translators.items()}
+        for system_prompt in prompts.values():
+            self.assertEqual(system_prompt.count(shared_prompt), 1)
+            self.assertGreater(system_prompt.index('Application output protocol'),
+                               system_prompt.index(shared_prompt))
+
+        self.assertIn('Return only the translation text as one physical line', prompts['plain'])
+        self.assertNotIn('Return exactly one JSON object', prompts['plain'])
+        self.assertIn('{"translation":"the target-language translation of the current utterance"}',
+                      prompts['json'])
+        self.assertNotIn('"context":"the updated rolling Context"', prompts['json'])
+        self.assertIn('"context":"the updated rolling Context"', prompts['context'])
+        self.assertEqual(prompts['context'], prompts['context_with_json_flag'])
 
     def test_messages_keep_all_three_fields_when_context_and_history_are_empty(self):
         translator = self._translator(history_size=0)
@@ -121,7 +163,7 @@ class TranslationContextTest(unittest.TestCase):
         )
 
     def test_strict_result_parser_normalizes_and_limits_context(self):
-        context = ('猫\n  の話 ' + 'あ' * 110)
+        context = ('猫\n  の話 ' + 'あ' * (TRANSLATION_CONTEXT_MAX_CHARS + 10))
         parsed = _parse_translation_context_completion(json.dumps({
             'translation': '  译文  ',
             'context': context,
@@ -131,7 +173,7 @@ class TranslationContextTest(unittest.TestCase):
         translation, normalized_context = parsed
         self.assertEqual(translation, '译文')
         self.assertNotIn('\n', normalized_context)
-        self.assertLessEqual(len(normalized_context), TRANSLATION_CONTEXT_MAX_CHARS)
+        self.assertEqual(len(normalized_context), TRANSLATION_CONTEXT_MAX_CHARS)
 
     def test_strict_result_parser_rejects_missing_empty_wrong_and_extra_fields(self):
         invalid = [
