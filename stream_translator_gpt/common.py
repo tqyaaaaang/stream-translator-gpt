@@ -82,6 +82,9 @@ class ClientPool:
     _openai_clients = []
     _openai_index = 0
     _openai_lock = threading.Lock()
+    _whisper_clients = []
+    _whisper_index = 0
+    _whisper_lock = threading.Lock()
     _google_clients = []
     _google_index = 0
     _google_lock = threading.Lock()
@@ -102,6 +105,8 @@ class ClientPool:
              google_api_key,
              proxy=None,
              openai_base_url=None,
+             whisper_api_key=None,
+             whisper_base_url=None,
              google_base_url=None,
              verify_ssl=True):
         cls.verify_ssl = verify_ssl
@@ -123,6 +128,27 @@ class ClientPool:
                 cls._openai_clients.append(client)
             logger.info('Initialized OpenAI client pool with %d client(s); custom endpoint=%s, proxy=%s, verify_ssl=%s',
                         len(cls._openai_clients), bool(openai_base_url), bool(proxy), verify)
+
+        cls._whisper_clients = []
+        cls._whisper_index = 0
+        effective_whisper_api_key = whisper_api_key or openai_api_key
+        effective_whisper_base_url = whisper_base_url or openai_base_url
+        if effective_whisper_api_key:
+            from openai import OpenAI
+            import httpx
+            verify = cls._should_verify_ssl(effective_whisper_base_url)
+            for key in effective_whisper_api_key.split(','):
+                key = key.strip()
+                client = OpenAI(
+                    api_key=key,
+                    base_url=effective_whisper_base_url,
+                    default_headers={'User-Agent': f'stream-translator-gpt/{__version__}'},
+                    http_client=httpx.Client(proxy=proxy, verify=verify),
+                )
+                cls._whisper_clients.append(client)
+            logger.info(
+                'Initialized Whisper API client pool with %d client(s); custom endpoint=%s, proxy=%s, verify_ssl=%s',
+                len(cls._whisper_clients), bool(effective_whisper_base_url), bool(proxy), verify)
 
         cls._google_clients = []
         cls._google_index = 0
@@ -175,6 +201,24 @@ class ClientPool:
             logger.error('Google client pool is empty')
             return None
         logger.debug('Using Google client %d of %d', index + 1, client_count)
+        return client
+
+    @classmethod
+    def get_whisper_client(cls):
+        with cls._whisper_lock:
+            if not cls._whisper_clients:
+                client = None
+                index = None
+                client_count = 0
+            else:
+                index = cls._whisper_index
+                client_count = len(cls._whisper_clients)
+                client = cls._whisper_clients[index]
+                cls._whisper_index = (index + 1) % client_count
+        if client is None:
+            logger.error('Whisper API client pool is empty')
+            return None
+        logger.debug('Using Whisper API client %d of %d', index + 1, client_count)
         return client
 
 

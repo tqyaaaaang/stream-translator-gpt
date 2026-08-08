@@ -288,7 +288,7 @@ class RemoteOpenaiTranscriber(AudioTranscriber):
             if prompt:
                 call_args['prompt'] = prompt
 
-        client = ClientPool.get_openai_client()
+        client = ClientPool.get_whisper_client()
         logger.debug('Sending audio to remote OpenAI transcription API')
         result = client.audio.transcriptions.create(**call_args).text
         logger.debug('Result from remote OpenAI transcription API received')

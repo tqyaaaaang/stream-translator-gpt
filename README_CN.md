@@ -157,9 +157,11 @@ stream-translator-gpt URL [OPTIONS]
 | :--------------------------------- | :----------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `URL`                              |                                | 直播流的 URL。如果填入本地文件路径，则会将其用作输入。如果填入 "device"，将从你的电脑设备获取输入。                                                                           |
 | **通用选项**                       |
-| `--openai-api-key`                 |                                | 使用 GPT 翻译 / OpenAI Transcription API 时需要的 OpenAI API key。如果有多个 key，可用 "," 分隔，每个 key 会轮流使用。                                                        |
+| `--openai-api-key`                 |                                | GPT 翻译使用的 OpenAI API key；未设置 `--whisper-api-key` 时也作为远程转录的后备 key。多个 key 可用 "," 分隔并轮流使用。                                                       |
+| `--whisper-api-key`                |                                | Whisper 兼容转录端点使用的 API key，会覆盖远程转录使用的 `--openai-api-key`。多个 key 可用 "," 分隔并轮流使用。                                                               |
 | `--google-api-key`                 |                                | 使用 Gemini 翻译时需要的 Google API key。如果有多个 key，可用 "," 分隔，每个 key 会轮流使用。                                                                                 |
-| `--openai-base-url`                |                                | 自定义 OpenAI 的 API 端点（影响 GPT 翻译和 OpenAI 转录）。                                                                                                                    |
+| `--openai-base-url`                |                                | 自定义 GPT 翻译使用的 OpenAI API 端点；未设置 `--whisper-base-url` 时也作为远程转录的后备端点。                                                                                |
+| `--whisper-base-url`               |                                | 自定义 Whisper 兼容转录 API 使用的端点。                                                                                                                                       |
 | `--google-base-url`                |                                | 自定义 Google 的 API 端点（影响 Gemini 翻译）。                                                                                                                               |
 | `--no-verify-ssl`                  |                                | 禁用 OpenAI / Google API 及 HuggingFace 下载的 TLS 证书校验。当你的 API 端点或代理使用自签名或无效证书时使用。如果 base URL 的主机是裸 IP，会自动禁用校验。                   |
 | `--proxy`                          |                                | 为所有未单独设置的 --*-proxy 选项统一设置代理。同时会设置 http_proxy 环境变量。                                                                                               |

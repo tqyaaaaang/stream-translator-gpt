@@ -37,15 +37,23 @@ class Config:
     input will be obtained from your PC device."""
 
     openai_api_key: str | None = None
-    """OpenAI API key if using GPT translation / Whisper API. If you have multiple keys, you can separate them with ","
-    and each key will be used in turn."""
+    """OpenAI API key for GPT translation. It is also used as the fallback key for the Whisper API when
+    --whisper-api-key is not set. Separate multiple keys with "," to rotate between them."""
+
+    whisper_api_key: str | None = None
+    """API key for a Whisper-compatible transcription endpoint. Falls back to --openai-api-key when unset. Separate
+    multiple keys with "," to rotate between them."""
 
     google_api_key: str | None = None
     """Google API key if using Gemini translation. If you have multiple keys, you can separate them with "," and each
     key will be used in turn."""
 
     openai_base_url: str | None = None
-    """Customize the API endpoint of OpenAI (Affects GPT translation & OpenAI Transcription)."""
+    """Customize the OpenAI endpoint used for GPT translation. It is also the fallback endpoint for transcription
+    when --whisper-base-url is not set."""
+
+    whisper_base_url: str | None = None
+    """Customize the endpoint used by the Whisper-compatible transcription API."""
 
     google_base_url: str | None = None
     """Customize the API endpoint of Google (Affects Gemini translation)."""
@@ -248,6 +256,8 @@ def run(config: Config):
                     google_api_key=config.google_api_key,
                     proxy=config.processing_proxy,
                     openai_base_url=config.openai_base_url,
+                    whisper_api_key=config.whisper_api_key,
+                    whisper_base_url=config.whisper_base_url,
                     google_base_url=config.google_base_url,
                     verify_ssl=config.verify_ssl)
 
@@ -540,8 +550,8 @@ def _validate_and_normalize(config: Config):
         logger.error('Cannot use SimulStreaming, OpenAI Transcription API or HuggingFace ASR at the same time')
         sys.exit(1)
 
-    if config.use_openai_transcription_api and not config.openai_api_key:
-        logger.error('Please fill in the OpenAI API key when enabling OpenAI Transcription API')
+    if config.use_openai_transcription_api and not (config.whisper_api_key or config.openai_api_key):
+        logger.error('Please fill in the Whisper API key or OpenAI API key when enabling remote transcription')
         sys.exit(1)
 
     if config.translation_prompt and not (config.openai_api_key or config.google_api_key):

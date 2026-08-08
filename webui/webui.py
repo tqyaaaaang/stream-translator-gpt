@@ -100,14 +100,15 @@ os.makedirs(USER_PRESETS_DIR, exist_ok=True)
 
 INPUT_KEYS = [
     "input_type", "input_url", "device_rec_interval", "audio_source", "input_file", "input_format", "input_cookies",
-    "input_proxy", "openai_key", "google_key", "openai_base_url", "google_base_url", "overall_proxy", "model_size",
-    "hf_model_name", "language", "whisper_backend", "openai_transcription_model", "vad_threshold", "min_audio_len",
-    "max_audio_len", "target_audio_len", "silence_threshold", "dynamic_vad_threshold", "dynamic_no_speech_threshold",
-    "prefix_retention_len", "filter_emoji", "filter_repetition", "filter_language_based", "transcription_context",
-    "transcription_keywords", "translation_prompt", "translation_provider", "gpt_model", "gemini_model", "history_size",
-    "translation_timeout", "processing_proxy", "use_json_result", "retry_if_translation_fails", "show_timestamps",
-    "hide_transcription", "output_file", "output_proxy", "cqhttp_url", "cqhttp_token", "discord_hook", "telegram_token",
-    "telegram_chat_id", "extra_cli_args"
+    "input_proxy", "openai_key", "google_key", "openai_base_url", "google_base_url", "openai_key_trans",
+    "openai_base_url_trans", "overall_proxy", "model_size", "hf_model_name", "language", "whisper_backend",
+    "openai_transcription_model", "vad_threshold", "min_audio_len", "max_audio_len", "target_audio_len",
+    "silence_threshold", "dynamic_vad_threshold", "dynamic_no_speech_threshold", "prefix_retention_len", "filter_emoji",
+    "filter_repetition", "filter_language_based", "transcription_context", "transcription_keywords",
+    "translation_prompt", "translation_provider", "gpt_model", "gemini_model", "history_size", "translation_timeout",
+    "processing_proxy", "use_json_result", "retry_if_translation_fails", "show_timestamps", "hide_transcription",
+    "output_file", "output_proxy", "cqhttp_url", "cqhttp_token", "discord_hook", "telegram_token", "telegram_chat_id",
+    "extra_cli_args"
 ]
 
 
@@ -309,7 +310,9 @@ def build_translator_command(
         discord_hook,
         telegram_token,
         telegram_chat_id,
-        extra_cli_args=None):
+        extra_cli_args=None,
+        whisper_api_key=None,
+        whisper_base_url=None):
     cmd = [sys.executable, "-u", "-m", "stream_translator_gpt"]
 
     def add_arg(flag, value, default_key=None):
@@ -382,12 +385,16 @@ def build_translator_command(
         cmd.append("--no-dynamic-no-speech-threshold")
 
     # --- API Keys & Base URLs ---
-    if openai_key and (whisper_backend == "OpenAI Transcription API" or translation_provider == "GPT"):
+    if openai_key and translation_provider == "GPT":
         cmd.extend(["--openai-api-key", openai_key])
+    if whisper_api_key and whisper_backend == "OpenAI Transcription API":
+        cmd.extend(["--whisper-api-key", whisper_api_key])
     if google_key and translation_provider == "Gemini":
         cmd.extend(["--google-api-key", google_key])
-    if openai_base_url and (whisper_backend == "OpenAI Transcription API" or translation_provider == "GPT"):
+    if openai_base_url and translation_provider == "GPT":
         cmd.extend(["--openai-base-url", openai_base_url])
+    if whisper_base_url and whisper_backend == "OpenAI Transcription API":
+        cmd.extend(["--whisper-base-url", whisper_base_url])
     if google_base_url and translation_provider == "Gemini":
         cmd.extend(["--google-base-url", google_base_url])
 
@@ -551,7 +558,9 @@ def run_translator(
         discord_hook,
         telegram_token,
         telegram_chat_id,
-        extra_cli_args):
+        extra_cli_args,
+        whisper_api_key,
+        whisper_base_url):
     global process, is_running
 
     if is_running:
@@ -566,8 +575,10 @@ def run_translator(
     if translation_provider == "Gemini" and not google_key:
         yield "Error: Google API Key is required for Gemini Translation.\nPlease enter your key in the 'Overall' tab.\n"
         return
-    if whisper_backend == "OpenAI Transcription API" and not openai_key:
-        yield "Error: OpenAI API Key is required for OpenAI Transcription.\nPlease enter your key in the 'Overall' tab.\n"
+    effective_whisper_api_key = whisper_api_key or openai_key
+    effective_whisper_base_url = whisper_base_url or openai_base_url
+    if whisper_backend == "OpenAI Transcription API" and not effective_whisper_api_key:
+        yield "Error: A Whisper API Key or OpenAI API Key is required for remote transcription.\n"
         return
 
     # --- Logic Enforcements ---
@@ -626,7 +637,9 @@ def run_translator(
                                           discord_hook=discord_hook,
                                           telegram_token=telegram_token,
                                           telegram_chat_id=telegram_chat_id,
-                                          extra_cli_args=extra_cli_args)
+                                          extra_cli_args=extra_cli_args,
+                                          whisper_api_key=effective_whisper_api_key,
+                                          whisper_base_url=effective_whisper_base_url)
 
     if error:
         yield error
@@ -797,9 +810,11 @@ with gr.Blocks() as demo:
             with gr.Group(visible=False) as openai_transcription_group:
                 with gr.Row():
                     openai_key_trans = gr.Textbox(label=i18n.get("openai_api_key"),
-                                                  placeholder=i18n.get("openai_api_key_ph"))
+                                                  placeholder=i18n.get("openai_api_key_ph"),
+                                                  value=get_default("openai_key_trans"))
                     openai_base_url_trans = gr.Textbox(label=i18n.get("gpt_base_url"),
-                                                       placeholder=i18n.get("gpt_base_url_ph"))
+                                                       placeholder=i18n.get("gpt_base_url_ph"),
+                                                       value=get_default("openai_base_url_trans"))
             with gr.Row():
                 model_size = gr.Dropdown([
                     "tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large",
@@ -1083,7 +1098,8 @@ with gr.Blocks() as demo:
                         translation_provider, gpt_model, gemini_model, history_size, translation_timeout,
                         openai_base_url, google_base_url, processing_proxy, use_json_result, retry_if_translation_fails,
                         show_timestamps, hide_transcription, output_file, output_proxy, cqhttp_url, cqhttp_token,
-                        discord_hook, telegram_token, telegram_chat_id, extra_cli_args
+                        discord_hook, telegram_token, telegram_chat_id, extra_cli_args, openai_key_trans,
+                        openai_base_url_trans
                     ],
                     outputs=output_box,
                     concurrency_limit=1,
@@ -1186,13 +1202,6 @@ with gr.Blocks() as demo:
     # Sync Processing Proxy
     processing_proxy_trans.change(fn=None, inputs=processing_proxy_trans, outputs=processing_proxy, js="(x) => x")
     processing_proxy.change(fn=None, inputs=processing_proxy, outputs=processing_proxy_trans, js="(x) => x")
-
-    # Sync OpenAI Transcription Keys
-    openai_key.change(fn=None, inputs=openai_key, outputs=openai_key_trans, js="(x) => x")
-    openai_key_trans.change(fn=None, inputs=openai_key_trans, outputs=openai_key, js="(x) => x")
-
-    openai_base_url.change(fn=None, inputs=openai_base_url, outputs=openai_base_url_trans, js="(x) => x")
-    openai_base_url_trans.change(fn=None, inputs=openai_base_url_trans, outputs=openai_base_url, js="(x) => x")
 
     # LocalStorage Persistence
     # A value equal to the bundled default is removed instead of stored, so that untouched fields
