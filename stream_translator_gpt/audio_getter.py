@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,20 +24,80 @@ from .logging_utils import redact_url
 logger = logging.getLogger('main')
 
 
-def _read_ffmpeg_loop(ffmpeg_process, byte_size: int, output_queue, source_name: str = 'ffmpeg'):
+class _RealtimeAudioPacer:
+    """Pace decoded samples against an absolute monotonic media timeline."""
+
+    def __init__(self, stop_event: threading.Event, clock=None, max_lag: float = 0.1) -> None:
+        self.stop_event = stop_event
+        self.clock = clock or time.monotonic
+        self.max_lag = max_lag
+        self.started_at = self.clock()
+        self.samples_emitted = 0
+
+    def wait_for_block(self, sample_count: int) -> bool:
+        if self.stop_event.is_set():
+            return False
+        now = self.clock()
+        next_sample_count = self.samples_emitted + sample_count
+        deadline = self.started_at + next_sample_count / SAMPLE_RATE
+        lag = now - deadline
+        if lag > self.max_lag:
+            self.started_at += lag
+            deadline = now
+            logger.warning('Realtime local file playback fell %.3fs behind; resuming without a catch-up burst', lag)
+        while (delay := deadline - self.clock()) > 0:
+            if self.stop_event.wait(delay):
+                return False
+        if self.stop_event.is_set():
+            return False
+        self.samples_emitted = next_sample_count
+        return True
+
+
+def _read_ffmpeg_loop(ffmpeg_process,
+                      byte_size: int,
+                      output_queue,
+                      source_name: str = 'ffmpeg',
+                      pacer: _RealtimeAudioPacer | None = None,
+                      pad_final_block: bool = False):
     complete_blocks = 0
     while True:
-        in_bytes = ffmpeg_process.stdout.read(byte_size)
+        chunks = []
+        remaining = byte_size
+        reached_eof = False
+        while remaining:
+            chunk = ffmpeg_process.stdout.read(remaining)
+            if not chunk:
+                reached_eof = True
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        in_bytes = b''.join(chunks)
         if not in_bytes:
             logger.debug('%s audio output reached EOF after %d complete block(s)', source_name, complete_blocks)
             break
-        if len(in_bytes) != byte_size:
+        valid_sample_count = len(in_bytes) // np.dtype(np.float32).itemsize
+        if len(in_bytes) != byte_size and not (pad_final_block and len(in_bytes) % 4 == 0):
             logger.warning('%s returned a short audio block; expected %d bytes, received %d bytes; discarding it',
                            source_name, byte_size, len(in_bytes))
+            if reached_eof:
+                logger.debug('%s audio output reached EOF after %d complete block(s)', source_name, complete_blocks)
+                break
             continue
         audio = np.frombuffer(in_bytes, np.float32).flatten()
+        if len(in_bytes) != byte_size:
+            expected_samples = byte_size // np.dtype(np.float32).itemsize
+            audio = np.pad(audio, (0, expected_samples - len(audio)))
+            logger.debug('%s padded its final audio block from %d to %d sample(s)', source_name, valid_sample_count,
+                         expected_samples)
+        if pacer is not None and not pacer.wait_for_block(valid_sample_count):
+            logger.debug('%s realtime playback stopped after %d emitted block(s)', source_name, complete_blocks)
+            break
         output_queue.put(audio)
         complete_blocks += 1
+        if reached_eof:
+            logger.debug('%s audio output reached EOF after %d emitted block(s)', source_name, complete_blocks)
+            break
     return complete_blocks
 
 
@@ -167,34 +228,67 @@ class StreamAudioGetter(LoopWorkerBase):
 
 class LocalFileAudioGetter(LoopWorkerBase):
 
-    def __init__(self, file_path: str) -> None:
+    def __init__(self, file_path: str, realtime: bool = False) -> None:
         self.file_path = file_path
+        self.realtime = realtime
         self.ffmpeg_process = None
+        self.stop_event = threading.Event()
+        self.pacer = None
         self.byte_size = round(SAMPLES_PER_FRAME * 4)  # Factor 4 comes from float32 (4 bytes per sample)
 
     def _exit_handler(self, signum, frame):
         logger.info('Stopping local file audio getter after signal %s', signum)
+        self.stop_event.set()
         if self.ffmpeg_process:
-            self.ffmpeg_process.kill()
+            if self.ffmpeg_process.poll() is None:
+                self.ffmpeg_process.kill()
+            try:
+                self.ffmpeg_process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                logger.error('Local file ffmpeg did not exit within 1.0s after signal %s', signum)
         sys.exit(0)
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
-        logger.warning('Opening local file: %s', self.file_path)
+        mode = 'realtime' if self.realtime else 'offline'
+        logger.warning('Opening local file in %s mode: %s', mode, self.file_path)
         try:
-            self.ffmpeg_process = (ffmpeg.input(self.file_path,
-                                                loglevel='panic').output('pipe:',
-                                                                         format='f32le',
-                                                                         acodec='pcm_f32le',
-                                                                         ac=1,
-                                                                         ar=SAMPLE_RATE).run_async(pipe_stdin=True,
-                                                                                                   pipe_stdout=True))
-        except ffmpeg.Error as e:
-            raise RuntimeError(f'Failed to load audio: {e.stderr.decode()}') from e
+            try:
+                self.ffmpeg_process = (ffmpeg.input(self.file_path,
+                                                    loglevel='panic').output('pipe:',
+                                                                             format='f32le',
+                                                                             acodec='pcm_f32le',
+                                                                             ac=1,
+                                                                             ar=SAMPLE_RATE).run_async(
+                                                                                 pipe_stdin=True,
+                                                                                 pipe_stdout=True))
+            except ffmpeg.Error as e:
+                stderr = e.stderr.decode(errors='replace') if e.stderr else str(e)
+                raise RuntimeError(f'Failed to load audio: {stderr}') from e
 
-        _read_ffmpeg_loop(self.ffmpeg_process, self.byte_size, output_queue)
-        logger.info('Local file audio input finished')
+            if self.realtime:
+                self.pacer = _RealtimeAudioPacer(self.stop_event)
+            _read_ffmpeg_loop(self.ffmpeg_process,
+                              self.byte_size,
+                              output_queue,
+                              source_name='local file ffmpeg',
+                              pacer=self.pacer,
+                              pad_final_block=self.realtime)
+            if self.stop_event.is_set() and self.ffmpeg_process.poll() is None:
+                self.ffmpeg_process.kill()
+            return_code = _wait_for_process(self.ffmpeg_process, 'local file ffmpeg')
+            if not self.stop_event.is_set() and return_code != 0:
+                raise RuntimeError(f'Local file ffmpeg exited with status {return_code}')
+            logger.info('Local file audio input finished')
+        except Exception:
+            if self.ffmpeg_process is not None:
+                if self.ffmpeg_process.poll() is None:
+                    self.ffmpeg_process.kill()
+                    try:
+                        self.ffmpeg_process.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        logger.error('Local file ffmpeg did not exit within 5.0s during failure cleanup')
+            raise
 
-        self.ffmpeg_process.kill()
         output_queue.put(None)
 
 

@@ -6,6 +6,7 @@
     "device_audio_getter": "pyaudio",
     "device_multiplier": 1.0,
     "input_file": null,
+    "local_file_mode": "offline",
     "input_format": "ba/wa*",
     "input_cookies": null,
     "input_proxy": "",

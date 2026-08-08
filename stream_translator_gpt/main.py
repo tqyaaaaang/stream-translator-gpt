@@ -80,6 +80,10 @@ class Config:
     input_proxy: str | None = None
     """Use the specified HTTP/HTTPS/SOCKS proxy for yt-dlp, e.g. http://127.0.0.1:7890."""
 
+    local_file_mode: Literal['offline', 'realtime'] = 'offline'
+    """Choose how local files are read. Offline mode processes as fast as possible; realtime mode emits one second
+    of decoded audio per second of wall-clock time."""
+
     device_index: int | None = None
     """The index of the device that needs to be recorded. If not set, the system default recording device will be
     used."""
@@ -293,8 +297,8 @@ def _create_audio_getter(config: Config):
             cookies=config.cookies,
             proxy=config.input_proxy,
         )
-    logger.debug('Selected local file audio input')
-    return LocalFileAudioGetter(file_path=config.url)
+    logger.debug('Selected local file audio input in %s mode', config.local_file_mode)
+    return LocalFileAudioGetter(file_path=config.url, realtime=config.local_file_mode == 'realtime')
 
 
 def run(config: Config):
