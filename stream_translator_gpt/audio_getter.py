@@ -98,8 +98,17 @@ def _open_stream(url: str, format: str, cookies: str, proxy: str, cwd: str):
                                                                          ac=1,
                                                                          ar=SAMPLE_RATE).run_async(pipe_stdin=True,
                                                                                                    pipe_stdout=True))
-    except ffmpeg.Error as e:
-        raise RuntimeError(f'Failed to load audio: {e.stderr.decode()}') from e
+    except Exception as exc:
+        if ytdlp_process.poll() is None:
+            try:
+                ytdlp_process.terminate()
+            except OSError:
+                logger.debug('yt-dlp exited before it could be terminated after ffmpeg startup failure', exc_info=True)
+        _wait_for_process(ytdlp_process, 'yt-dlp')
+        if isinstance(exc, ffmpeg.Error):
+            stderr = exc.stderr.decode(errors='replace') if exc.stderr else str(exc)
+            raise RuntimeError(f'Failed to load audio: {stderr}') from exc
+        raise
 
     logger.debug('Started yt-dlp process %d and ffmpeg process %d', ytdlp_process.pid, ffmpeg_process.pid)
     thread = threading.Thread(target=_transport,

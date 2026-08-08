@@ -6,7 +6,7 @@ from unittest import mock
 
 import numpy as np
 
-from stream_translator_gpt.audio_getter import _read_ffmpeg_loop, _transport, _wait_for_process
+from stream_translator_gpt.audio_getter import _open_stream, _read_ffmpeg_loop, _transport, _wait_for_process
 from stream_translator_gpt.logging_utils import configure_logging, shutdown_logging
 
 
@@ -95,6 +95,20 @@ class StreamDiagnosticsTest(unittest.TestCase):
         self.assertEqual(return_code, -9)
         process.kill.assert_called_once_with()
         self.assertIn('did not exit within 0.1s', output.getvalue())
+
+    def test_ffmpeg_start_failure_reaps_started_ytdlp(self):
+        ytdlp = mock.Mock()
+        ytdlp.poll.return_value = None
+        ytdlp.wait.return_value = -15
+
+        with mock.patch('stream_translator_gpt.audio_getter.subprocess.Popen', return_value=ytdlp):
+            with mock.patch('stream_translator_gpt.audio_getter.ffmpeg.input',
+                            side_effect=RuntimeError('start failed')):
+                with self.assertRaisesRegex(RuntimeError, 'start failed'):
+                    _open_stream('https://example.com/stream', 'ba', None, None, 'workdir')
+
+        ytdlp.terminate.assert_called_once_with()
+        ytdlp.wait.assert_called_once_with(timeout=5.0)
 
 
 if __name__ == '__main__':
