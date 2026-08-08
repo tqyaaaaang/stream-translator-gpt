@@ -31,6 +31,17 @@ class SoundDeviceGetterTest(unittest.TestCase):
         self.assertEqual(sounddevice_config.device_audio_getter, 'sounddevice')
         self.assertEqual(sounddevice_config.device_multiplier, 0.5)
 
+    def test_cli_accepts_bounded_debug_audio_options(self):
+        config = tyro.cli(Config,
+                          args=[
+                              'device', '--device-audio-getter', 'sounddevice', '--device-audio-debug-dir', 'clips',
+                              '--device-audio-debug-clip-duration', '2.5', '--device-audio-debug-max-clips', '3'
+                          ])
+
+        self.assertEqual(config.device_audio_debug_dir, 'clips')
+        self.assertEqual(config.device_audio_debug_clip_duration, 2.5)
+        self.assertEqual(config.device_audio_debug_max_clips, 3)
+
     def test_device_index_zero_is_preserved(self):
         fake_sounddevice = types.ModuleType('sounddevice')
         fake_sounddevice.default = types.SimpleNamespace(device=(3, 4))
@@ -51,7 +62,12 @@ class SoundDeviceGetterTest(unittest.TestCase):
                 result = _create_audio_getter(config)
 
         self.assertIs(result, sentinel)
-        sounddevice_cls.assert_called_once_with(device_index=4, interval=0.5, multiplier=2.0)
+        sounddevice_cls.assert_called_once_with(device_index=4,
+                                                interval=0.5,
+                                                multiplier=2.0,
+                                                debug_audio_dir=None,
+                                                debug_clip_duration=10.0,
+                                                debug_max_clips=10)
         pyaudio_cls.assert_not_called()
 
     def test_non_default_multiplier_is_rejected_for_pyaudio(self):
@@ -60,6 +76,22 @@ class SoundDeviceGetterTest(unittest.TestCase):
         with mock.patch('stream_translator_gpt.main.logger.error'):
             with self.assertRaises(SystemExit):
                 _validate_and_normalize(config)
+
+    def test_debug_audio_is_rejected_for_pyaudio(self):
+        config = Config(url='device', device_audio_debug_dir='clips')
+
+        with mock.patch('stream_translator_gpt.main.logger.error'):
+            with self.assertRaises(SystemExit):
+                _validate_and_normalize(config)
+
+    def test_debug_audio_limits_must_be_positive(self):
+        for field, value in [('device_audio_debug_clip_duration', 0), ('device_audio_debug_max_clips', 0)]:
+            with self.subTest(field=field):
+                config = Config(url='device', device_audio_getter='sounddevice', device_audio_debug_dir='clips')
+                setattr(config, field, value)
+                with mock.patch('stream_translator_gpt.main.logger.error'):
+                    with self.assertRaises(SystemExit):
+                        _validate_and_normalize(config)
 
 
 if __name__ == '__main__':

@@ -8,6 +8,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import wave
+from datetime import datetime, timezone
+from pathlib import Path
 
 import ffmpeg
 import numpy as np
@@ -200,9 +203,15 @@ def _sounddevice_gain(volume_factor: float) -> float:
 
 
 class SoundDeviceAudioGetter(LoopWorkerBase):
-    """Compatibility device getter backed by sounddevice's blocking recorder."""
+    """Compatibility device getter backed by a continuous sounddevice stream."""
 
-    def __init__(self, device_index: int | None, interval: float = 0.5, multiplier: float = 1.0) -> None:
+    def __init__(self,
+                 device_index: int | None,
+                 interval: float = 0.5,
+                 multiplier: float = 1.0,
+                 debug_audio_dir: str | None = None,
+                 debug_clip_duration: float = 10.0,
+                 debug_max_clips: int = 10) -> None:
         try:
             import sounddevice as sd
         except ImportError as exc:
@@ -219,32 +228,189 @@ class SoundDeviceAudioGetter(LoopWorkerBase):
             raise RuntimeError(f'Sounddevice device {self.device_index} does not support audio input.')
 
         self.device_name = device_info['name']
+        self.native_rate = int(float(device_info.get('default_samplerate', SAMPLE_RATE)))
+        if self.native_rate <= 0:
+            self.native_rate = SAMPLE_RATE
+        self.channels = min(int(device_info.get('max_input_channels', 1)), 2)
         self.interval = interval
         self.volume_factor = multiplier
         self.gain = _sounddevice_gain(multiplier)
+        self.recording_queue = queue.Queue(maxsize=8)
+        self.dropped_blocks = 0
+        self.stream = None
+        self.stopping = threading.Event()
+        self.debug_dumper = (_DebugAudioDumper(debug_audio_dir, debug_clip_duration, debug_max_clips)
+                             if debug_audio_dir else None)
 
     def _exit_handler(self, signum, frame):
         logger.info('Stopping sounddevice audio getter after signal %s', signum)
+        self.stopping.set()
+        while True:
+            try:
+                self.recording_queue.put_nowait(None)
+                break
+            except queue.Full:
+                try:
+                    self.recording_queue.get_nowait()
+                except queue.Empty:
+                    pass
+        if self.stream is not None:
+            try:
+                self.stream.abort()
+            except Exception:
+                logger.debug('Unable to abort sounddevice stream cleanly', exc_info=True)
         sys.exit(0)
+
+    def _recording_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
+        if status:
+            logger.warning('Sounddevice recorder returned status=%s', status)
+        if self.stopping.is_set():
+            return
+        audio = indata.copy()
+        try:
+            self.recording_queue.put_nowait(audio)
+        except queue.Full:
+            try:
+                self.recording_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.recording_queue.put_nowait(audio)
+            except queue.Full:
+                return
+            self.dropped_blocks += 1
+            if self.dropped_blocks == 1 or self.dropped_blocks % 100 == 0:
+                logger.warning('Sounddevice processing is behind; dropped %d queued audio block(s)',
+                               self.dropped_blocks)
+
+    def _prepare_audio(self, audio: np.ndarray) -> np.ndarray:
+        audio = np.asarray(audio, dtype=np.float32)
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        else:
+            audio = audio.reshape(-1)
+        if self.native_rate != SAMPLE_RATE and len(audio):
+            target_len = max(1, round(len(audio) * SAMPLE_RATE / self.native_rate))
+            audio = resample(audio, target_len)
+        return np.asarray(audio, dtype=np.float32) * self.gain
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
         logger.warning('Recording sounddevice input: %s (index %s)', self.device_name, self.device_index)
         logger.warning('Recording multiplier: %.6f (volume factor %.3f)', self.gain, self.volume_factor)
-        read_size = max(1, round(SAMPLE_RATE * self.interval))
+        read_size = max(1, round(self.native_rate * self.interval))
         buffer = np.array([], dtype=np.float32)
 
-        while True:
-            audio = self.sounddevice.rec(frames=read_size,
-                                         samplerate=SAMPLE_RATE,
-                                         channels=1,
-                                         dtype=np.float32,
-                                         device=self.device_index,
-                                         blocking=True)
-            audio = np.asarray(audio, dtype=np.float32).reshape(-1) * self.gain
-            buffer = np.concatenate((buffer, audio))
-            while len(buffer) >= SAMPLES_PER_FRAME:
-                output_queue.put(buffer[:SAMPLES_PER_FRAME])
-                buffer = buffer[SAMPLES_PER_FRAME:]
+        try:
+            with self.sounddevice.InputStream(blocksize=read_size,
+                                              samplerate=self.native_rate,
+                                              channels=self.channels,
+                                              dtype=np.float32,
+                                              device=self.device_index,
+                                              callback=self._recording_callback) as stream:
+                self.stream = stream
+                while True:
+                    audio = self.recording_queue.get()
+                    if audio is None:
+                        break
+                    audio = self._prepare_audio(audio)
+                    if self.debug_dumper is not None:
+                        self.debug_dumper.add(audio)
+                    buffer = np.concatenate((buffer, audio))
+                    while len(buffer) >= SAMPLES_PER_FRAME:
+                        output_queue.put(buffer[:SAMPLES_PER_FRAME])
+                        buffer = buffer[SAMPLES_PER_FRAME:]
+        except Exception:
+            logger.exception('Sounddevice audio recording error')
+        finally:
+            self.stopping.set()
+            self.stream = None
+            if self.debug_dumper is not None:
+                self.debug_dumper.close()
+            output_queue.put(None)
+
+
+class _DebugAudioDumper:
+    """Write bounded, atomic PCM16 WAV clips from processed sounddevice audio."""
+
+    def __init__(self, output_dir: str, clip_duration: float, max_clips: int) -> None:
+        if clip_duration <= 0:
+            raise ValueError('device debug clip duration must be greater than zero')
+        if max_clips <= 0:
+            raise ValueError('device debug max clips must be greater than zero')
+        self.output_dir = Path(output_dir).expanduser()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.clip_samples = max(1, round(clip_duration * SAMPLE_RATE))
+        self.max_clips = max_clips
+        self.clip_count = 0
+        self.chunks = []
+        self.sample_count = 0
+        self.closed = False
+        self.limit_logged = False
+
+    def add(self, audio: np.ndarray) -> None:
+        if self.closed or self.clip_count >= self.max_clips:
+            self._log_limit_once()
+            return
+        audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+        if not len(audio):
+            return
+        self.chunks.append(audio.copy())
+        self.sample_count += len(audio)
+        while self.sample_count >= self.clip_samples and self.clip_count < self.max_clips:
+            combined = np.concatenate(self.chunks)
+            if not self._write_clip(combined[:self.clip_samples]):
+                self.chunks = []
+                self.sample_count = 0
+                return
+            remainder = combined[self.clip_samples:]
+            self.chunks = [remainder] if len(remainder) else []
+            self.sample_count = len(remainder)
+        if self.clip_count >= self.max_clips:
+            self.chunks = []
+            self.sample_count = 0
+            self._log_limit_once()
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        if self.sample_count and self.clip_count < self.max_clips:
+            self._write_clip(np.concatenate(self.chunks))
+        self.chunks = []
+        self.sample_count = 0
+        self.closed = True
+
+    def _log_limit_once(self) -> None:
+        if not self.limit_logged and self.clip_count >= self.max_clips:
+            logger.warning('Device debug audio reached the maximum of %d clip(s); capture disabled', self.max_clips)
+            self.limit_logged = True
+
+    def _write_clip(self, audio: np.ndarray) -> bool:
+        sequence = self.clip_count + 1
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+        final_path = self.output_dir / f'device-audio-{timestamp}-{os.getpid()}-{sequence:04d}.wav'
+        while final_path.exists():
+            sequence += 1
+            final_path = self.output_dir / f'device-audio-{timestamp}-{os.getpid()}-{sequence:04d}.wav'
+        part_path = final_path.with_suffix(final_path.suffix + '.part')
+        clipped = np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
+        pcm = np.clip(np.rint(clipped * 32768.0), -32768, 32767).astype('<i2')
+        try:
+            with wave.open(str(part_path), 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(SAMPLE_RATE)
+                wav_file.writeframes(pcm.tobytes())
+            os.replace(part_path, final_path)
+        except Exception:
+            try:
+                part_path.unlink(missing_ok=True)
+            finally:
+                self.closed = True
+            logger.exception('Failed to write device debug audio clip')
+            return False
+        self.clip_count += 1
+        logger.info('Saved device debug audio clip %d/%d: %s', self.clip_count, self.max_clips, final_path)
+        return True
 
 
 class DeviceAudioGetter(LoopWorkerBase):
