@@ -9,7 +9,7 @@ import sys
 import time
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from typing import Annotated
+from typing import Annotated, Literal
 
 import tyro
 
@@ -18,7 +18,7 @@ if __name__ == '__main__':
     __package__ = "stream_translator_gpt"
 
 from .common import ClientPool, start_daemon_thread, is_url
-from .audio_getter import StreamAudioGetter, LocalFileAudioGetter, DeviceAudioGetter
+from .audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAudioGetter, StreamAudioGetter
 from .audio_slicer import AudioSlicer
 from .audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
 from .llm_translator import GPTTranslator, GeminiTranslator
@@ -87,6 +87,14 @@ class Config:
     device_recording_interval: float = 0.5
     """The shorter the recording interval, the lower the latency, but it will increase CPU usage. It is recommended to
     set it between 0.1 and 1.0."""
+
+    device_audio_getter: Literal['pyaudio', 'sounddevice'] = 'pyaudio'
+    """Select the device capture implementation. PyAudio remains the default; use sounddevice as a compatibility
+    fallback for input-capable devices that PyAudio cannot capture."""
+
+    device_multiplier: float = 1.0
+    """Legacy perceptual volume factor for the sounddevice getter. 1 keeps the original amplitude; this option does
+    not affect the PyAudio getter."""
 
     list_devices: Annotated[bool, tyro.conf.FlagCreatePairsOff] = False
     """Print all audio devices info then exit."""
@@ -249,6 +257,30 @@ class Config:
     """Use the specified HTTP/HTTPS/SOCKS proxy for Cqhttp/Discord/Telegram, e.g. http://127.0.0.1:7890."""
 
 
+def _create_audio_getter(config: Config):
+    if config.url.lower() == 'device':
+        logger.debug('Selected %s device audio input', config.device_audio_getter)
+        if config.device_audio_getter == 'sounddevice':
+            return SoundDeviceAudioGetter(device_index=config.device_index,
+                                          interval=config.device_recording_interval,
+                                          multiplier=config.device_multiplier)
+        return DeviceAudioGetter(
+            device_index=config.device_index,
+            use_mic=config.mic,
+            interval=config.device_recording_interval,
+        )
+    if is_url(config.url):
+        logger.debug('Selected stream audio input')
+        return StreamAudioGetter(
+            url=config.url,
+            format=config.format,
+            cookies=config.cookies,
+            proxy=config.input_proxy,
+        )
+    logger.debug('Selected local file audio input')
+    return LocalFileAudioGetter(file_path=config.url)
+
+
 def run(config: Config):
     """Run the transcription / translation pipeline until the input is exhausted."""
     logger.info('Initializing transcription and translation pipeline')
@@ -270,27 +302,7 @@ def run(config: Config):
     # Init workers
     with ThreadPoolExecutor(thread_name_prefix='initializer') as executor:
 
-        def init_audio_getter():
-            if config.url.lower() == 'device':
-                logger.debug('Selected device audio input')
-                return DeviceAudioGetter(
-                    device_index=config.device_index,
-                    use_mic=config.mic,
-                    interval=config.device_recording_interval,
-                )
-            elif is_url(config.url):
-                logger.debug('Selected stream audio input')
-                return StreamAudioGetter(
-                    url=config.url,
-                    format=config.format,
-                    cookies=config.cookies,
-                    proxy=config.input_proxy,
-                )
-            else:
-                logger.debug('Selected local file audio input')
-                return LocalFileAudioGetter(file_path=config.url)
-
-        audio_getter_future = executor.submit(init_audio_getter)
+        audio_getter_future = executor.submit(_create_audio_getter, config)
         slicer_future = executor.submit(
             AudioSlicer,
             min_audio_length=config.min_audio_length,
@@ -468,7 +480,20 @@ def _apply_overall_proxy(config: Config):
     logger.info('Applied the overall proxy to environment and unset proxy options')
 
 
-def _print_audio_devices():
+def _print_audio_devices(device_audio_getter: str = 'pyaudio'):
+    if device_audio_getter == 'sounddevice':
+        try:
+            import sounddevice as sd
+        except ImportError:
+            logger.error('sounddevice is not installed. Unable to list sounddevice devices.')
+            sys.exit(1)
+
+        print('Available sounddevice input devices:')
+        for index, device in enumerate(sd.query_devices()):
+            if int(device.get('max_input_channels', 0)) > 0:
+                print(f"{index}: {device['name']}")
+        return
+
     if platform.system() == 'Windows':
         import pyaudiowpatch as pa
     else:
@@ -531,6 +556,20 @@ def _validate_and_normalize(config: Config):
                              'please choose a non .en model')
                 sys.exit(1)
 
+    if config.url.lower() == 'device':
+        if config.device_recording_interval <= 0:
+            logger.error('Device recording interval must be greater than zero')
+            sys.exit(1)
+        try:
+            from .audio_getter import _sounddevice_gain
+            _sounddevice_gain(config.device_multiplier)
+        except ValueError as exc:
+            logger.error('%s', exc)
+            sys.exit(1)
+        if config.device_audio_getter != 'sounddevice' and config.device_multiplier != 1.0:
+            logger.error('--device-multiplier only applies to --device-audio-getter sounddevice')
+            sys.exit(1)
+
     transcription_encoder_flag_num = 0
     transcription_decoder_flag_num = 0
     if config.use_faster_whisper:
@@ -586,7 +625,7 @@ def cli():
         _apply_overall_proxy(config)
 
         if config.list_devices:
-            _print_audio_devices()
+            _print_audio_devices(config.device_audio_getter)
             return
         if config.list_format:
             _print_stream_formats(config)

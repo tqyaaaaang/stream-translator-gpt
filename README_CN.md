@@ -173,6 +173,8 @@ stream-translator-gpt URL [OPTIONS]
 | `--device-index`                   |                                | 需要录制的设备编号。不设置时使用系统默认录音设备。                                                                                                                            |
 | `--list-devices`                   |                                | 打印所有音频设备信息后退出。                                                                                                                                                  |
 | `--device-recording-interval`      | 0.5                            | 录制间隔越短延迟越低，但会增加 CPU 占用。建议设置在 0.1 到 1.0 之间。                                                                                                         |
+| `--device-audio-getter`            | pyaudio                        | 选择 `pyaudio` 或手动 `sounddevice` 后备。SoundDevice 只能捕获可输入设备；如需系统音频，请用 `--device-index` 选择 monitor、stereo-mix 或虚拟输入设备。                            |
+| `--device-multiplier`              | 1.0                            | 仅用于 sounddevice 获取器的旧版感知音量因子；1 表示保持原始振幅。                                                                                                             |
 | `--mic`                            |                                | 使用麦克风代替系统音频（电脑正在播放的声音）作为输入。                                                                                                                        |
 | **音频切片选项**                   |
 | `--min-audio-length`               | 0.5                            | 音频切片的最小长度（秒）。                                                                                                                                                    |

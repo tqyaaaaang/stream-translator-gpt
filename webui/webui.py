@@ -99,7 +99,8 @@ SETTINGS_FILE = os.path.join(USER_CONFIG_DIR, "settings.json")
 os.makedirs(USER_PRESETS_DIR, exist_ok=True)
 
 INPUT_KEYS = [
-    "input_type", "input_url", "device_rec_interval", "audio_source", "input_file", "input_format", "input_cookies",
+    "input_type", "input_url", "device_rec_interval", "audio_source", "device_audio_getter", "device_multiplier",
+    "input_file", "input_format", "input_cookies",
     "input_proxy", "openai_key", "google_key", "openai_base_url", "google_base_url", "openai_key_trans",
     "openai_base_url_trans", "overall_proxy", "model_size", "hf_model_name", "language", "whisper_backend",
     "openai_transcription_model", "vad_threshold", "min_audio_len", "max_audio_len", "target_audio_len",
@@ -312,7 +313,9 @@ def build_translator_command(
         telegram_chat_id,
         extra_cli_args=None,
         whisper_api_key=None,
-        whisper_base_url=None):
+        whisper_base_url=None,
+        device_audio_getter='pyaudio',
+        device_multiplier=1.0):
     cmd = [sys.executable, "-u", "-m", "stream_translator_gpt"]
 
     def add_arg(flag, value, default_key=None):
@@ -354,6 +357,9 @@ def build_translator_command(
     elif input_type == "Device":
         target_url = "device"
         add_arg("--device-recording-interval", device_rec_interval, "device_rec_interval")
+        add_arg("--device-audio-getter", device_audio_getter, "device_audio_getter")
+        if device_audio_getter == "sounddevice":
+            add_arg("--device-multiplier", device_multiplier, "device_multiplier")
         if audio_source == "Input Audio":
             cmd.append("--mic")
     elif input_type == "File":
@@ -560,7 +566,9 @@ def run_translator(
         telegram_chat_id,
         extra_cli_args,
         whisper_api_key,
-        whisper_base_url):
+        whisper_base_url,
+        device_audio_getter,
+        device_multiplier):
     global process, is_running
 
     if is_running:
@@ -639,7 +647,9 @@ def run_translator(
                                           telegram_chat_id=telegram_chat_id,
                                           extra_cli_args=extra_cli_args,
                                           whisper_api_key=effective_whisper_api_key,
-                                          whisper_base_url=effective_whisper_base_url)
+                                          whisper_base_url=effective_whisper_base_url,
+                                          device_audio_getter=device_audio_getter,
+                                          device_multiplier=device_multiplier)
 
     if error:
         yield error
@@ -760,6 +770,17 @@ with gr.Blocks() as demo:
                                                     label=i18n.get("recording_interval"),
                                                     info=i18n.get("recording_interval_info"),
                                                     scale=1)
+                with gr.Row():
+                    device_audio_getter = gr.Dropdown(choices=[("PyAudio", "pyaudio"),
+                                                               ("SoundDevice", "sounddevice")],
+                                                      value=get_default("device_audio_getter"),
+                                                      label=i18n.get("device_audio_getter"),
+                                                      info=i18n.get("device_audio_getter_info"))
+                    device_multiplier = gr.Number(value=get_default("device_multiplier"),
+                                                  minimum=0,
+                                                  step=0.1,
+                                                  label=i18n.get("device_multiplier"),
+                                                  info=i18n.get("device_multiplier_info"))
 
             with gr.Group(visible=False) as file_group:
                 input_file = gr.File(label=i18n.get("local_file_path"), type="filepath", file_count="single")
@@ -1099,7 +1120,7 @@ with gr.Blocks() as demo:
                         openai_base_url, google_base_url, processing_proxy, use_json_result, retry_if_translation_fails,
                         show_timestamps, hide_transcription, output_file, output_proxy, cqhttp_url, cqhttp_token,
                         discord_hook, telegram_token, telegram_chat_id, extra_cli_args, openai_key_trans,
-                        openai_base_url_trans
+                        openai_base_url_trans, device_audio_getter, device_multiplier
                     ],
                     outputs=output_box,
                     concurrency_limit=1,

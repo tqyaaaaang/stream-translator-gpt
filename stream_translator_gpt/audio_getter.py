@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import platform
 import queue
@@ -183,6 +184,67 @@ class LocalFileAudioGetter(LoopWorkerBase):
 
         self.ffmpeg_process.kill()
         output_queue.put(None)
+
+
+def _sounddevice_gain(volume_factor: float) -> float:
+    """Convert the legacy perceptual volume factor to an amplitude gain."""
+    if not math.isfinite(volume_factor) or volume_factor < 0:
+        raise ValueError('device multiplier must be a finite, non-negative number')
+    try:
+        gain = 2**((volume_factor**(1 / 8) * 192 - 192) / 6)
+    except OverflowError as exc:
+        raise ValueError('device multiplier is too large') from exc
+    if not math.isfinite(gain):
+        raise ValueError('device multiplier produces a non-finite gain')
+    return gain
+
+
+class SoundDeviceAudioGetter(LoopWorkerBase):
+    """Compatibility device getter backed by sounddevice's blocking recorder."""
+
+    def __init__(self, device_index: int | None, interval: float = 0.5, multiplier: float = 1.0) -> None:
+        try:
+            import sounddevice as sd
+        except ImportError as exc:
+            raise RuntimeError('sounddevice is not installed. Install it to use the sounddevice audio getter.') from exc
+
+        if interval <= 0:
+            raise ValueError('device recording interval must be greater than zero')
+        self.sounddevice = sd
+        self.device_index = device_index if device_index is not None else sd.default.device[0]
+        if self.device_index is None or self.device_index < 0:
+            raise RuntimeError('No default sounddevice input device is available.')
+        device_info = sd.query_devices(self.device_index)
+        if int(device_info.get('max_input_channels', 0)) < 1:
+            raise RuntimeError(f'Sounddevice device {self.device_index} does not support audio input.')
+
+        self.device_name = device_info['name']
+        self.interval = interval
+        self.volume_factor = multiplier
+        self.gain = _sounddevice_gain(multiplier)
+
+    def _exit_handler(self, signum, frame):
+        logger.info('Stopping sounddevice audio getter after signal %s', signum)
+        sys.exit(0)
+
+    def loop(self, output_queue: queue.SimpleQueue[np.array]):
+        logger.warning('Recording sounddevice input: %s (index %s)', self.device_name, self.device_index)
+        logger.warning('Recording multiplier: %.6f (volume factor %.3f)', self.gain, self.volume_factor)
+        read_size = max(1, round(SAMPLE_RATE * self.interval))
+        buffer = np.array([], dtype=np.float32)
+
+        while True:
+            audio = self.sounddevice.rec(frames=read_size,
+                                         samplerate=SAMPLE_RATE,
+                                         channels=1,
+                                         dtype=np.float32,
+                                         device=self.device_index,
+                                         blocking=True)
+            audio = np.asarray(audio, dtype=np.float32).reshape(-1) * self.gain
+            buffer = np.concatenate((buffer, audio))
+            while len(buffer) >= SAMPLES_PER_FRAME:
+                output_queue.put(buffer[:SAMPLES_PER_FRAME])
+                buffer = buffer[SAMPLES_PER_FRAME:]
 
 
 class DeviceAudioGetter(LoopWorkerBase):
