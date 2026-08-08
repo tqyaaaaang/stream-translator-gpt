@@ -12,6 +12,7 @@ The easiest way to use this tool, no local environment to set up, and Colab's pe
 
 - [Create a **Google API key**](https://aistudio.google.com/app/apikey) for **Gemini API** translation (recommended, since the **Gemini Flash-Lite** model has a free quota of 15 requests per minute / 500 per day)
 - [Create an **OpenAI API key**](https://platform.openai.com/api-keys) for **OpenAI Transcription API** transcription or **GPT API** translation (any **OpenAI-compatible API** can also be used)
+- A [**Modulate API key**](https://docs.modulate.ai/guides/authentication) is required to use **Modulate Multilingual Transcription — Streaming**.
 
 |                                                                                        Command Line                                                                                        |                                                                                        WebUI                                                                                        |
 | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
@@ -46,6 +47,7 @@ flowchart LR
         cc("`**SimulStreaming**`")
         cd("`**OpenAI Transcription API**`")
         ce("`**HuggingFace ASR**`")
+        cf("`**Modulate Streaming**`")
     end
     subgraph gd["`**Translation**`"]
         direction LR
@@ -63,13 +65,15 @@ flowchart LR
     aa --> gb
     ab --> gb
     gb ==> gc
+    aa -.-> cf
+    ab -.-> cf
     gc ==> gd
     gd ==> ge
 ```
 
 - **Input**: [**yt-dlp**](https://github.com/yt-dlp/yt-dlp) extracts audio from live streams; local media files and PC device audio are also supported.
-- **Audio slicing**: dynamic-threshold slicing based on [**Silero-VAD**](https://github.com/snakers4/silero-vad).
-- **Transcription**: locally with [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition), or remotely with the [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text).
+- **Audio slicing**: dynamic-threshold slicing based on [**Silero-VAD**](https://github.com/snakers4/silero-vad). The Modulate streaming backend consumes the 16 kHz audio stream directly and bypasses VAD.
+- **Transcription**: locally with [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition), or remotely with the [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text) / [**Modulate Multilingual Transcription — Streaming**](https://docs.modulate.ai/api-reference/stt/streaming).
 - **Translation** (optional): OpenAI's [**GPT API**](https://platform.openai.com/docs/overview) or Google's [**Gemini API**](https://ai.google.dev/gemini-api/docs).
 - **Output**: print to **terminal**, save to a **file** (e.g. **.srt** subtitles), or send to **Discord** / **Telegram** / **Cqhttp**.
 
@@ -81,7 +85,7 @@ Running locally requires some experience with Python environments (especially on
 2. **FFmpeg** (skip if already installed):
    - Windows: `winget install ffmpeg`
    - Linux (Debian/Ubuntu): `sudo apt install ffmpeg`
-3. For **local transcription** (Whisper / Faster-Whisper / SimulStreaming / HuggingFace ASR) — not needed if you only use the OpenAI Transcription API:
+3. For **local transcription** (Whisper / Faster-Whisper / SimulStreaming / HuggingFace ASR) — not needed if you only use the OpenAI Transcription API or Modulate Streaming:
    - [Install **CUDA** on your system](https://developer.nvidia.com/cuda-downloads)
    - [Install **PyTorch** (with CUDA) to your Python](https://pytorch.org/get-started/locally/)
    - [Install **cuDNN** to your CUDA dir](https://developer.nvidia.com/cudnn-downloads) if you want to use **Faster-Whisper**
@@ -123,7 +127,14 @@ stream-translator-gpt URL [OPTIONS]
 - **SimulStreaming**: ```stream-translator-gpt {URL} --language {input_language} --use-simul-streaming```
 - **SimulStreaming** with **Faster-Whisper** as the encoder: ```stream-translator-gpt {URL} --language {input_language} --use-simul-streaming --use-faster-whisper```
 - **OpenAI Transcription API**: ```stream-translator-gpt {URL} --language {input_language} --use-openai-transcription-api --openai-api-key {your_openai_key}```
+- **Modulate Multilingual Transcription — Streaming**: ```stream-translator-gpt {URL} --use-modulate-transcription-api --modulate-api-key {your_modulate_key}```
 - **HuggingFace ASR** model (requires `pip install stream-translator-gpt[hf_asr]`; only models with `pipeline_tag: automatic-speech-recognition` on Hugging Face Hub are supported): ```stream-translator-gpt {URL} --model {hf_model_name} --use-hf-asr```
+
+The Modulate backend sends 16 kHz audio directly to the model's streaming mode without Silero VAD. Every completed model utterance becomes a new sentence. Partial results are monitored for long utterances: once `--modulate-partial-cutoff-seconds` has elapsed from the first uncommitted text (or a forced split that already has a remainder), the next full-width or half-width punctuation mark commits the current segment. Silence between sentences doesn't consume the next sentence's timeout. Unexpected transport interruptions are retried with exponential backoff; after reconnecting, the program replays up to 120 seconds of audio received since the most recent final result. Explicit authentication, quota, and API errors are not retried. For a local file, use real-time playback so the timeout follows the media timeline:
+
+```bash
+stream-translator-gpt /path/to/file --local-file-mode realtime --use-modulate-transcription-api --modulate-api-key {your_modulate_key}
+```
 
 **Translation** (enabled by setting `--translation-prompt`; the provider is chosen by which API key you fill in):
 
@@ -159,6 +170,7 @@ stream-translator-gpt URL [OPTIONS]
 | **Overall Options**                |
 | `--openai-api-key`                 |                                | OpenAI API key for GPT translation. It is also the fallback key for remote transcription when `--whisper-api-key` is not set. Multiple comma-separated keys are rotated.                                                                                           |
 | `--whisper-api-key`                |                                | API key for a Whisper-compatible transcription endpoint. Overrides `--openai-api-key` for remote transcription. Multiple comma-separated keys are rotated.                                                                                                       |
+| `--modulate-api-key`               |                                | API key for Modulate Multilingual Transcription — Streaming. Required when `--use-modulate-transcription-api` is enabled.                                                                                                                                            |
 | `--google-api-key`                 |                                | Google API key if using Gemini translation. If you have multiple keys, you can separate them with "," and each key will be used in turn.                                                                                                                              |
 | `--openai-base-url`                |                                | Customize the OpenAI endpoint for GPT translation. It is also the fallback transcription endpoint when `--whisper-base-url` is not set.                                                                                                                            |
 | `--whisper-base-url`               |                                | Customize the endpoint used by the Whisper-compatible transcription API.                                                                                                                                                                                           |
@@ -195,6 +207,10 @@ stream-translator-gpt URL [OPTIONS]
 | `--use-faster-whisper`             |                                | Use Faster-Whisper instead of Whisper. If used with --use-simul-streaming, SimulStreaming with Faster-Whisper as the encoder will be used.                                                                                                                            |
 | `--use-simul-streaming`            |                                | Use SimulStreaming instead of Whisper. If used with --use-faster-whisper, SimulStreaming with Faster-Whisper as the encoder will be used.                                                                                                                             |
 | `--use-openai-transcription-api`   |                                | Use OpenAI Transcription API instead of the original local Whisper.                                                                                                                                                                                                   |
+| `--use-modulate-transcription-api` |                                | Use Modulate Multilingual Transcription — Streaming. It streams 16 kHz audio directly and bypasses Silero VAD.                                                                                                                                                        |
+| `--modulate-partial-cutoff-seconds` | 10.0                           | After this many seconds from the first uncommitted text, commit at the next full-width or half-width punctuation mark. Silence before that text does not count.                                                                                                      |
+| `--modulate-reconnect-attempts`    | 3                              | Maximum number of reconnect attempts after an unexpected Modulate transport interruption. Explicit authentication, quota, and API errors are not retried.                                                                                                            |
+| `--modulate-reconnect-backoff-seconds` | 1.0                        | Initial reconnect delay in seconds. Each subsequent retry uses exponential backoff; a successful reconnect replays up to 120 seconds of audio since the most recent final result.                                                                                      |
 | `--openai-transcription-model`     | gpt-transcribe                 | OpenAI transcription model. `gpt-transcribe` is recommended for ordinary transcription; `whisper-1`, `gpt-4o-mini-transcribe`, and `gpt-4o-transcribe` are also supported.                                                                                            |
 | `--use-hf-asr`                     |                                | Use a HuggingFace ASR model. Use `--model` to specify the model ID. Requires `pip install stream-translator-gpt[hf_asr]`.                                                                                                                                             |
 | `--transcription-filters`          | emoji_filter,repetition_filter | Filters apply to transcription results, separated by ",". We provide emoji_filter and repetition_filter.                                                                                                                                                              |

@@ -17,6 +17,8 @@
     "language": "auto",
     "whisper_backend": "Whisper",
     "openai_transcription_model": "gpt-transcribe",
+    "modulate_api_key": "",
+    "modulate_partial_cutoff_seconds": 10.0,
     "vad_threshold": 0.35,
     "min_audio_len": 0.5,
     "max_audio_len": 30.0,

@@ -49,6 +49,7 @@ dependencies = [
   "openai>=2.0,<3.0",
   "google-genai>=2.0,<3.0",
   "httpx>=0.26.0,<1.0",
+  "websockets>=16.1,<17.0",
   "tyro>=1.0,<2.0"
 ]
 

@@ -109,7 +109,7 @@ INPUT_KEYS = [
     "translation_prompt", "translation_provider", "gpt_model", "gemini_model", "history_size", "translation_timeout",
     "processing_proxy", "use_json_result", "retry_if_translation_fails", "show_timestamps", "hide_transcription",
     "output_file", "output_proxy", "cqhttp_url", "cqhttp_token", "discord_hook", "telegram_token", "telegram_chat_id",
-    "extra_cli_args"
+    "extra_cli_args", "modulate_api_key", "modulate_partial_cutoff_seconds"
 ]
 
 
@@ -316,7 +316,9 @@ def build_translator_command(
         whisper_base_url=None,
         device_audio_getter='pyaudio',
         device_multiplier=1.0,
-        local_file_mode='offline'):
+        local_file_mode='offline',
+        modulate_api_key=None,
+        modulate_partial_cutoff_seconds=10.0):
     cmd = [sys.executable, "-u", "-m", "stream_translator_gpt"]
 
     def add_arg(flag, value, default_key=None):
@@ -383,17 +385,19 @@ def build_translator_command(
             cmd.extend(["--input-proxy", input_proxy])
 
     # --- Audio Slicing ---
-    add_arg("--vad-threshold", vad_threshold, "vad_threshold")
-    if not dynamic_vad_threshold:
-        cmd.append("--no-dynamic-vad-threshold")
+    # Modulate consumes the getter stream directly and does not run the VAD slicer.
+    if whisper_backend != "Modulate Streaming":
+        add_arg("--vad-threshold", vad_threshold, "vad_threshold")
+        if not dynamic_vad_threshold:
+            cmd.append("--no-dynamic-vad-threshold")
 
-    add_arg("--min-audio-length", min_audio_len, "min_audio_len")
-    add_arg("--max-audio-length", max_audio_len, "max_audio_len")
-    add_arg("--target-audio-length", target_audio_len, "target_audio_len")
-    add_arg("--continuous-no-speech-threshold", silence_threshold, "silence_threshold")
-    add_arg("--prefix-retention-length", prefix_retention_len, "prefix_retention_len")
-    if not dynamic_no_speech_threshold:
-        cmd.append("--no-dynamic-no-speech-threshold")
+        add_arg("--min-audio-length", min_audio_len, "min_audio_len")
+        add_arg("--max-audio-length", max_audio_len, "max_audio_len")
+        add_arg("--target-audio-length", target_audio_len, "target_audio_len")
+        add_arg("--continuous-no-speech-threshold", silence_threshold, "silence_threshold")
+        add_arg("--prefix-retention-length", prefix_retention_len, "prefix_retention_len")
+        if not dynamic_no_speech_threshold:
+            cmd.append("--no-dynamic-no-speech-threshold")
 
     # --- API Keys & Base URLs ---
     if openai_key and translation_provider == "GPT":
@@ -422,12 +426,19 @@ def build_translator_command(
     elif whisper_backend == "OpenAI Transcription API":
         cmd.append("--use-openai-transcription-api")
         add_arg("--openai-transcription-model", openai_transcription_model, "openai_transcription_model")
+    elif whisper_backend == "Modulate Streaming":
+        if not modulate_api_key:
+            return None, "Error: A Modulate API Key is required for Modulate Streaming transcription.\n"
+        cmd.extend(["--use-modulate-transcription-api", "--modulate-api-key", modulate_api_key])
+        add_arg("--modulate-partial-cutoff-seconds", modulate_partial_cutoff_seconds,
+                "modulate_partial_cutoff_seconds")
 
     if whisper_backend == "HuggingFace ASR":
         add_arg("--model", hf_model_name)
-    else:
+    elif whisper_backend != "Modulate Streaming":
         add_arg("--model", model_size, "model_size")
-    add_arg("--language", language, "language")
+    if whisper_backend != "Modulate Streaming":
+        add_arg("--language", language, "language")
     if transcription_context:
         cmd.append("--transcription-context")
 
@@ -461,8 +472,10 @@ def build_translator_command(
             cmd.append("--use-json-result")
         if retry_if_translation_fails:
             cmd.append("--retry-if-translation-fails")
-        if processing_proxy:
-            cmd.extend(["--processing-proxy", processing_proxy])
+
+    # This proxy is shared by remote transcription and translation backends.
+    if processing_proxy:
+        cmd.extend(["--processing-proxy", processing_proxy])
 
     # --- Output ---
     if show_timestamps:
@@ -574,7 +587,9 @@ def run_translator(
         whisper_base_url,
         device_audio_getter,
         device_multiplier,
-        local_file_mode):
+        local_file_mode,
+        modulate_api_key,
+        modulate_partial_cutoff_seconds):
     global process, is_running
 
     if is_running:
@@ -656,7 +671,9 @@ def run_translator(
                                           whisper_base_url=effective_whisper_base_url,
                                           device_audio_getter=device_audio_getter,
                                           device_multiplier=device_multiplier,
-                                          local_file_mode=local_file_mode)
+                                          local_file_mode=local_file_mode,
+                                          modulate_api_key=modulate_api_key,
+                                          modulate_partial_cutoff_seconds=modulate_partial_cutoff_seconds)
 
     if error:
         yield error
@@ -798,6 +815,7 @@ with gr.Blocks() as demo:
                                               info=i18n.get("local_file_mode_info"))
 
         with gr.Tab(i18n.get("audio_slicing")):
+            modulate_vad_bypass_notice = gr.Markdown(i18n.get("modulate_vad_bypass_info"), visible=False)
             with gr.Group():
                 vad_threshold = gr.Slider(0.0, 1.0, value=get_default("vad_threshold"), label=i18n.get("vad_threshold"))
                 dynamic_vad_threshold = gr.Checkbox(label=i18n.get("dynamic_vad_threshold"),
@@ -835,7 +853,8 @@ with gr.Blocks() as demo:
                 ("Whisper", "Whisper"), ("Faster-Whisper", "Faster-Whisper"), ("Simul-Streaming", "Simul-Streaming"),
                 ("Faster-Whisper & Simul-Streaming", "Faster-Whisper & Simul-Streaming"),
                 ("HuggingFace ASR", "HuggingFace ASR"),
-                (i18n.get("openai_transcription_api_option"), "OpenAI Transcription API")
+                (i18n.get("openai_transcription_api_option"), "OpenAI Transcription API"),
+                (i18n.get("modulate_transcription_option"), "Modulate Streaming")
             ],
                                        label=i18n.get("transcription_type"),
                                        value=get_default("whisper_backend"))
@@ -848,6 +867,19 @@ with gr.Blocks() as demo:
                     openai_base_url_trans = gr.Textbox(label=i18n.get("gpt_base_url"),
                                                        placeholder=i18n.get("gpt_base_url_ph"),
                                                        value=get_default("openai_base_url_trans"))
+            with gr.Group(visible=False) as modulate_transcription_group:
+                with gr.Row():
+                    modulate_api_key = gr.Textbox(label=i18n.get("modulate_api_key"),
+                                                  placeholder=i18n.get("modulate_api_key_ph"),
+                                                  value=get_default("modulate_api_key"),
+                                                  type="password",
+                                                  elem_id="modulate-api-key")
+                    modulate_partial_cutoff_seconds = gr.Number(
+                        value=get_default("modulate_partial_cutoff_seconds"),
+                        minimum=0.1,
+                        step=0.5,
+                        label=i18n.get("modulate_partial_cutoff_seconds"),
+                        info=i18n.get("modulate_partial_cutoff_seconds_info"))
             with gr.Row():
                 model_size = gr.Dropdown([
                     "tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large",
@@ -1038,15 +1070,22 @@ with gr.Blocks() as demo:
     def update_backend_visibility(choice):
         openai_visible = (choice == "OpenAI Transcription API")
         hf_visible = (choice == "HuggingFace ASR")
+        modulate_visible = (choice == "Modulate Streaming")
         return {
             openai_transcription_model: gr.update(visible=openai_visible),
-            model_size: gr.update(visible=not openai_visible and not hf_visible),
+            model_size: gr.update(visible=not openai_visible and not hf_visible and not modulate_visible),
             openai_transcription_group: gr.update(visible=openai_visible),
             hf_model_name: gr.update(visible=hf_visible),
+            modulate_transcription_group: gr.update(visible=modulate_visible),
+            language: gr.update(visible=not modulate_visible),
+            modulate_vad_bypass_notice: gr.update(visible=modulate_visible),
         }
 
     whisper_backend.change(update_backend_visibility, whisper_backend,
-                           [openai_transcription_model, model_size, openai_transcription_group, hf_model_name])
+                           [
+                               openai_transcription_model, model_size, openai_transcription_group, hf_model_name,
+                               modulate_transcription_group, language, modulate_vad_bypass_notice
+                           ])
 
     # Translation Visibility
     def update_translation_visibility(choice):
@@ -1110,7 +1149,8 @@ with gr.Blocks() as demo:
         const currentValues = [
             [8, "openai-key-translation"],
             [35, "openai-base-url-translation"],
-            [37, "processing-proxy-translation"]
+            [37, "processing-proxy-translation"],
+            [55, "modulate-api-key"]
         ];
         for (const [index, id] of currentValues) {
             const input = document.querySelector(`#${id} input, #${id} textarea`);
@@ -1132,7 +1172,8 @@ with gr.Blocks() as demo:
                         openai_base_url, google_base_url, processing_proxy, use_json_result, retry_if_translation_fails,
                         show_timestamps, hide_transcription, output_file, output_proxy, cqhttp_url, cqhttp_token,
                         discord_hook, telegram_token, telegram_chat_id, extra_cli_args, openai_key_trans,
-                        openai_base_url_trans, device_audio_getter, device_multiplier, local_file_mode
+                        openai_base_url_trans, device_audio_getter, device_multiplier, local_file_mode,
+                        modulate_api_key, modulate_partial_cutoff_seconds
                     ],
                     outputs=output_box,
                     concurrency_limit=1,

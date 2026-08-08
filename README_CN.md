@@ -12,6 +12,7 @@
 
 - 使用 **Gemini API** 翻译：[创建 **Google API key**](https://aistudio.google.com/app/apikey)（推荐，Gemini 的 **Flash-Lite** 模型有每分钟 15 条、每日 500 条的免费额度）
 - 使用 **OpenAI Transcription API** 转录或 **GPT API** 翻译：[创建 **OpenAI API key**](https://platform.openai.com/api-keys)（也可以使用任何 **OpenAI 兼容格式**的 API）
+- 使用 **Modulate Multilingual Transcription — Streaming** 需要准备 [**Modulate API key**](https://docs.modulate.ai/guides/authentication)。
 
 |                                                                                            命令行                                                                                             |                                                                                         WebUI                                                                                          |
 | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
@@ -46,6 +47,7 @@ flowchart LR
         cc("`**SimulStreaming**`")
         cd("`**OpenAI Transcription API**`")
         ce("`**HuggingFace ASR**`")
+        cf("`**Modulate Streaming**`")
     end
     subgraph gd["`**翻译**`"]
         direction LR
@@ -63,13 +65,15 @@ flowchart LR
     aa --> gb
     ab --> gb
     gb ==> gc
+    aa -.-> cf
+    ab -.-> cf
     gc ==> gd
     gd ==> ge
 ```
 
 - **输入**：[**yt-dlp**](https://github.com/yt-dlp/yt-dlp) 从直播流中提取音频；也支持本地媒体文件和电脑设备音频。
-- **音频切片**：基于 [**Silero-VAD**](https://github.com/snakers4/silero-vad) 的动态阈值切片。
-- **转录**：本地使用 [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition)，或远程调用 [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text)。
+- **音频切片**：基于 [**Silero-VAD**](https://github.com/snakers4/silero-vad) 的动态阈值切片。Modulate 流式后端会直接处理 16 kHz 音频流并绕过 VAD。
+- **转录**：本地使用 [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition)，或远程调用 [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text) / [**Modulate Multilingual Transcription — Streaming**](https://docs.modulate.ai/api-reference/stt/streaming)。
 - **翻译**（可选）：OpenAI 的 [**GPT API**](https://platform.openai.com/docs/overview) 或 Google 的 [**Gemini API**](https://ai.google.dev/gemini-api/docs)。
 - **输出**：打印到**终端**、保存到**文件**（如 **.srt** 字幕），或发送到 **Discord** / **Telegram** / **Cqhttp**。
 
@@ -81,7 +85,7 @@ flowchart LR
 2. **FFmpeg**（已安装可跳过）：
    - Windows: `winget install ffmpeg`
    - Linux (Debian/Ubuntu): `sudo apt install ffmpeg`
-3. 如需**本地转录**（Whisper / Faster-Whisper / SimulStreaming / HuggingFace ASR）时安装，只用 OpenAI Transcription API 的话不需要：
+3. 如需**本地转录**（Whisper / Faster-Whisper / SimulStreaming / HuggingFace ASR）时安装；只用 OpenAI Transcription API 或 Modulate Streaming 的话不需要：
    - [在系统上安装 **CUDA**](https://developer.nvidia.com/cuda-downloads)
    - [为 Python 安装 **PyTorch**（CUDA 版）](https://pytorch.org/get-started/locally/)
    - 如需使用 **Faster-Whisper**，[将 **cuDNN** 安装到 CUDA 目录](https://developer.nvidia.com/cudnn-downloads)
@@ -123,7 +127,14 @@ stream-translator-gpt URL [OPTIONS]
 - **SimulStreaming**: ```stream-translator-gpt {网址} --language {输入语言} --use-simul-streaming```
 - 以 **Faster-Whisper** 为编码器的 **SimulStreaming**: ```stream-translator-gpt {网址} --language {输入语言} --use-simul-streaming --use-faster-whisper```
 - **OpenAI Transcription API**: ```stream-translator-gpt {网址} --language {输入语言} --use-openai-transcription-api --openai-api-key {你的 OpenAI key}```
+- **Modulate Multilingual Transcription — Streaming**: ```stream-translator-gpt {网址} --use-modulate-transcription-api --modulate-api-key {你的 Modulate key}```
 - **HuggingFace ASR** 模型（需要 `pip install stream-translator-gpt[hf_asr]`；仅支持 Hugging Face Hub 上 `pipeline_tag` 为 `automatic-speech-recognition` 的模型）: ```stream-translator-gpt {网址} --model {hf_模型名} --use-hf-asr```
+
+Modulate 后端不使用 Silero VAD，而是把 16 kHz 音频直接发送给模型的流式模式；模型完成的每个 utterance 都会成为一个新句子。程序会持续监控 partial result：从当前未提交句子的第一个字（或切断时已存在的后续文字）开始计时，超过 `--modulate-partial-cutoff-seconds` 后，会在随后出现的第一个全角或半角标点处提交当前分段；句子之间的静音不会占用下一句的等待时间。发生意外传输中断时，程序会按指数退避重连；重连成功后，会重放上一个 final 结果之后收到的、最多 120 秒音频。显式认证、额度和 API 错误不会重试。处理本地文件时，请使用实时播放，让超时判断与媒体时间一致：
+
+```bash
+stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-transcription-api --modulate-api-key {你的 Modulate key}
+```
 
 **翻译**（设置 `--translation-prompt` 即启用；根据填写的 API key 自动选择服务商）：
 
@@ -159,6 +170,7 @@ stream-translator-gpt URL [OPTIONS]
 | **通用选项**                       |
 | `--openai-api-key`                 |                                | GPT 翻译使用的 OpenAI API key；未设置 `--whisper-api-key` 时也作为远程转录的后备 key。多个 key 可用 "," 分隔并轮流使用。                                                       |
 | `--whisper-api-key`                |                                | Whisper 兼容转录端点使用的 API key，会覆盖远程转录使用的 `--openai-api-key`。多个 key 可用 "," 分隔并轮流使用。                                                               |
+| `--modulate-api-key`               |                                | Modulate Multilingual Transcription — Streaming 使用的 API key；启用 `--use-modulate-transcription-api` 时必须设置。                                                        |
 | `--google-api-key`                 |                                | 使用 Gemini 翻译时需要的 Google API key。如果有多个 key，可用 "," 分隔，每个 key 会轮流使用。                                                                                 |
 | `--openai-base-url`                |                                | 自定义 GPT 翻译使用的 OpenAI API 端点；未设置 `--whisper-base-url` 时也作为远程转录的后备端点。                                                                                |
 | `--whisper-base-url`               |                                | 自定义 Whisper 兼容转录 API 使用的端点。                                                                                                                                       |
@@ -195,6 +207,10 @@ stream-translator-gpt URL [OPTIONS]
 | `--use-faster-whisper`             |                                | 使用 Faster-Whisper 代替 Whisper。与 --use-simul-streaming 同时使用时，将以 Faster-Whisper 为编码器运行 SimulStreaming。                                                      |
 | `--use-simul-streaming`            |                                | 使用 SimulStreaming 代替 Whisper。与 --use-faster-whisper 同时使用时，将以 Faster-Whisper 为编码器运行 SimulStreaming。                                                       |
 | `--use-openai-transcription-api`   |                                | 使用 OpenAI Transcription API 代替本地 Whisper。                                                                                                                              |
+| `--use-modulate-transcription-api` |                                | 使用 Modulate Multilingual Transcription — Streaming，直接流式处理 16 kHz 音频并绕过 Silero VAD。                                                                            |
+| `--modulate-partial-cutoff-seconds` | 10.0                           | 从当前未提交句子的第一个字开始超过该秒数后，在随后出现的第一个全角或半角标点处提交；此前的静音不计入等待时间。                                                                        |
+| `--modulate-reconnect-attempts`    | 3                              | Modulate 意外传输中断后的最大重连次数；显式认证、额度和 API 错误不会重试。                                                                                                    |
+| `--modulate-reconnect-backoff-seconds` | 1.0                        | 首次重连等待秒数；后续重试采用指数退避。重连成功后会重放上一个 final 结果之后收到的、最多 120 秒音频。                                                                       |
 | `--openai-transcription-model`     | gpt-transcribe                 | OpenAI 转录模型。普通转录推荐使用 `gpt-transcribe`；也支持 `whisper-1`、`gpt-4o-mini-transcribe` 和 `gpt-4o-transcribe`。                                                     |
 | `--use-hf-asr`                     |                                | 使用 HuggingFace ASR 模型，用 `--model` 指定模型 ID。需要 `pip install stream-translator-gpt[hf_asr]`。                                                                       |
 | `--transcription-filters`          | emoji_filter,repetition_filter | 应用于转录结果的过滤器，用 "," 分隔。目前提供 emoji_filter 和 repetition_filter。                                                                                             |

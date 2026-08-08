@@ -1,5 +1,6 @@
 import dataclasses
 import logging
+import math
 import os
 import platform
 import queue
@@ -17,10 +18,10 @@ if __name__ == '__main__':
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     __package__ = "stream_translator_gpt"
 
-from .common import ClientPool, start_daemon_thread, is_url
+from .common import ClientPool, SAMPLE_RATE, SAMPLES_PER_FRAME, start_daemon_thread, is_url
 from .audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAudioGetter, StreamAudioGetter
-from .audio_slicer import AudioSlicer
 from .audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
+from .modulate_transcriber import MODULATE_REPLAY_SECONDS, ModulateStreamingTranscriber
 from .llm_translator import GPTTranslator, GeminiTranslator
 from .result_exporter import ResultExporter
 from .logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
@@ -43,6 +44,9 @@ class Config:
     whisper_api_key: str | None = None
     """API key for a Whisper-compatible transcription endpoint. Falls back to --openai-api-key when unset. Separate
     multiple keys with "," to rotate between them."""
+
+    modulate_api_key: str | None = None
+    """API key for Modulate multilingual streaming transcription."""
 
     google_api_key: str | None = None
     """Google API key if using Gemini translation. If you have multiple keys, you can separate them with "," and each
@@ -161,6 +165,19 @@ class Config:
 
     use_openai_transcription_api: bool = False
     """Use OpenAI Transcription API instead of the original local Whisper."""
+
+    use_modulate_transcription_api: bool = False
+    """Use Modulate multilingual streaming transcription. Audio is sent directly without VAD slicing."""
+
+    modulate_partial_cutoff_seconds: float = 10.0
+    """After a Modulate partial utterance has remained open for longer than this many seconds, force a new output
+    segment at the next newly observed full-width or half-width punctuation mark."""
+
+    modulate_reconnect_attempts: int = 3
+    """Number of automatic reconnection attempts after an unexpected Modulate WebSocket interruption."""
+
+    modulate_reconnect_backoff_seconds: float = 1.0
+    """Initial delay before reconnecting to Modulate. Repeated failures use exponential backoff up to 30 seconds."""
 
     openai_transcription_model: str = 'gpt-transcribe'
     """OpenAI's transcription model name, gpt-transcribe / whisper-1 / gpt-4o-mini-transcribe /
@@ -314,7 +331,9 @@ def run(config: Config):
                     verify_ssl=config.verify_ssl)
 
     # Init queues
-    getter_to_slicer_queue = queue.SimpleQueue()
+    modulate_buffer_chunks = math.ceil(MODULATE_REPLAY_SECONDS * SAMPLE_RATE / SAMPLES_PER_FRAME)
+    getter_to_slicer_queue = (queue.Queue(maxsize=modulate_buffer_chunks)
+                              if config.use_modulate_transcription_api else queue.SimpleQueue())
     slicer_to_transcriber_queue = queue.SimpleQueue()
     transcriber_to_translator_queue = queue.SimpleQueue()
     translator_to_exporter_queue = queue.SimpleQueue() if config.translation_prompt else transcriber_to_translator_queue
@@ -323,17 +342,22 @@ def run(config: Config):
     with ThreadPoolExecutor(thread_name_prefix='initializer') as executor:
 
         audio_getter_future = executor.submit(_create_audio_getter, config)
-        slicer_future = executor.submit(
-            AudioSlicer,
-            min_audio_length=config.min_audio_length,
-            max_audio_length=config.max_audio_length,
-            target_audio_length=config.target_audio_length,
-            continuous_no_speech_threshold=config.continuous_no_speech_threshold,
-            dynamic_no_speech_threshold=config.dynamic_no_speech_threshold,
-            prefix_retention_length=config.prefix_retention_length,
-            vad_threshold=config.vad_threshold,
-            dynamic_vad_threshold=config.dynamic_vad_threshold,
-        )
+        if config.use_modulate_transcription_api:
+            slicer_future = None
+        else:
+            # Keep the VAD dependency out of the Modulate path entirely.
+            from .audio_slicer import AudioSlicer
+            slicer_future = executor.submit(
+                AudioSlicer,
+                min_audio_length=config.min_audio_length,
+                max_audio_length=config.max_audio_length,
+                target_audio_length=config.target_audio_length,
+                continuous_no_speech_threshold=config.continuous_no_speech_threshold,
+                dynamic_no_speech_threshold=config.dynamic_no_speech_threshold,
+                prefix_retention_length=config.prefix_retention_length,
+                vad_threshold=config.vad_threshold,
+                dynamic_vad_threshold=config.dynamic_vad_threshold,
+            )
 
         def init_transcriber():
             common_args = {
@@ -344,7 +368,19 @@ def run(config: Config):
                 'use_history_context': config.transcription_context,
                 'transcription_keywords': config.transcription_keywords,
             }
-            if config.use_simul_streaming:
+            if config.use_modulate_transcription_api:
+                logger.debug('Selected Modulate streaming transcription backend')
+                return ModulateStreamingTranscriber(
+                    api_key=config.modulate_api_key,
+                    partial_cutoff_seconds=config.modulate_partial_cutoff_seconds,
+                    reconnect_attempts=config.modulate_reconnect_attempts,
+                    reconnect_backoff_seconds=config.modulate_reconnect_backoff_seconds,
+                    proxy=config.processing_proxy,
+                    verify_ssl=config.verify_ssl,
+                    language=config.language,
+                    **common_args,
+                )
+            elif config.use_simul_streaming:
                 logger.debug('Selected SimulStreaming transcription backend')
                 return SimulStreaming(model=config.model,
                                       language=config.language,
@@ -423,7 +459,7 @@ def run(config: Config):
         )
 
         audio_getter = audio_getter_future.result()
-        slicer = slicer_future.result()
+        slicer = slicer_future.result() if slicer_future else None
         transcriber = transcriber_future.result()
         translator = translator_future.result()
         exporter = exporter_future.result()
@@ -436,16 +472,17 @@ def run(config: Config):
 
     # Start working
     start_daemon_thread(audio_getter.loop, name='getter', output_queue=getter_to_slicer_queue)
-    start_daemon_thread(
-        slicer.loop,
-        name='slicer',
-        input_queue=getter_to_slicer_queue,
-        output_queue=slicer_to_transcriber_queue,
-    )
+    if slicer:
+        start_daemon_thread(
+            slicer.loop,
+            name='slicer',
+            input_queue=getter_to_slicer_queue,
+            output_queue=slicer_to_transcriber_queue,
+        )
     start_daemon_thread(
         transcriber.loop,
         name='transcriber',
-        input_queue=slicer_to_transcriber_queue,
+        input_queue=(getter_to_slicer_queue if config.use_modulate_transcription_api else slicer_to_transcriber_queue),
         output_queue=transcriber_to_translator_queue,
     )
     if translator:
@@ -602,19 +639,41 @@ def _validate_and_normalize(config: Config):
     if config.use_openai_transcription_api:
         transcription_encoder_flag_num += 1
         transcription_decoder_flag_num += 1
+    if config.use_modulate_transcription_api:
+        transcription_encoder_flag_num += 1
+        transcription_decoder_flag_num += 1
     if config.use_hf_asr:
         transcription_encoder_flag_num += 1
         transcription_decoder_flag_num += 1
     if transcription_encoder_flag_num > 1:
-        logger.error('Cannot use Faster Whisper, OpenAI Transcription API or HuggingFace ASR at the same time')
+        logger.error('Cannot combine Faster Whisper, OpenAI Transcription API, Modulate or HuggingFace ASR backends')
         sys.exit(1)
     if transcription_decoder_flag_num > 1:
-        logger.error('Cannot use SimulStreaming, OpenAI Transcription API or HuggingFace ASR at the same time')
+        logger.error('Cannot combine SimulStreaming, OpenAI Transcription API, Modulate or HuggingFace ASR backends')
         sys.exit(1)
 
     if config.use_openai_transcription_api and not (config.whisper_api_key or config.openai_api_key):
         logger.error('Please fill in the Whisper API key or OpenAI API key when enabling remote transcription')
         sys.exit(1)
+
+    if config.use_modulate_transcription_api:
+        if not (config.modulate_api_key or '').strip():
+            logger.error('Please fill in the Modulate API key when enabling Modulate streaming transcription')
+            sys.exit(1)
+        if (not math.isfinite(config.modulate_partial_cutoff_seconds)
+                or config.modulate_partial_cutoff_seconds <= 0):
+            logger.error('Modulate partial cutoff seconds must be a finite value greater than zero')
+            sys.exit(1)
+        if config.modulate_reconnect_attempts < 0:
+            logger.error('Modulate reconnect attempts must be zero or greater')
+            sys.exit(1)
+        if (not math.isfinite(config.modulate_reconnect_backoff_seconds)
+                or config.modulate_reconnect_backoff_seconds < 0):
+            logger.error('Modulate reconnect backoff seconds must be a finite value of zero or greater')
+            sys.exit(1)
+        if config.url.lower() != 'device' and not is_url(config.url) and config.local_file_mode != 'realtime':
+            logger.warning('Modulate local-file transcription works best with --local-file-mode realtime so partial '
+                           'cutoff timing follows the media timeline')
 
     if config.translation_prompt and not (config.openai_api_key or config.google_api_key):
         logger.error('Please fill in the OpenAI / Google API key when enabling LLM translation')
