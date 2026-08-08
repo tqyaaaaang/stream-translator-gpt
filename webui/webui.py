@@ -355,6 +355,10 @@ def build_translator_command(
             return None, "Error: URL is required.\n"
         target_url = url
     elif input_type == "Device":
+        if device_audio_getter == "sounddevice" and audio_source != "Input Audio":
+            return None, ("Error: SoundDevice captures input-capable devices only. Select 'Input Audio'; for system "
+                          "audio, pass a monitor, stereo-mix, or virtual-input index through --device-index in Extra "
+                          "CLI Arguments.\n")
         target_url = "device"
         add_arg("--device-recording-interval", device_rec_interval, "device_rec_interval")
         add_arg("--device-audio-getter", device_audio_getter, "device_audio_getter")

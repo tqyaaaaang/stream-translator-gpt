@@ -28,7 +28,7 @@
     "recording_interval": "録音間隔 (秒)",
     "recording_interval_info": "値を大きくすると、一度にキャプチャするオーディオ チャンクが大きくなり、CPU 使用率が低下します。",
     "device_audio_getter": "デバイス音声ゲッター",
-    "device_audio_getter_info": "PyAudio で取得できない入力デバイスには SoundDevice を手動フォールバックとして使用します。",
+    "device_audio_getter_info": "SoundDevice は入力可能なデバイスのみを取得します。「入力音声」を選択し、システム音声には「追加 CLI 引数」で --device-index に monitor、stereo-mix、または仮想入力を指定してください。",
     "device_multiplier": "SoundDevice 音量係数",
     "device_multiplier_info": "SoundDevice のみで使う従来の知覚音量係数です。1 で元の振幅を維持します。",
     "local_file_path": "ローカルファイルパス",

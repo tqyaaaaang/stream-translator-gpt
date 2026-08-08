@@ -173,6 +173,21 @@ class DebugAudioDumperTest(unittest.TestCase):
             self.assertFalse(list(output_dir.iterdir()))
             self.assertTrue(dumper.closed)
 
+    def test_close_writes_one_partial_clip_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            dumper = _DebugAudioDumper(str(output_dir), 8 / SAMPLE_RATE, max_clips=2)
+            dumper.add(np.array([0.1, 0.2, 0.3], dtype=np.float32))
+
+            dumper.close()
+            dumper.close()
+
+            wav_paths = list(output_dir.glob('*.wav'))
+            self.assertEqual(len(wav_paths), 1)
+            with wave.open(str(wav_paths[0]), 'rb') as wav_file:
+                self.assertEqual(wav_file.getnframes(), 3)
+            self.assertFalse(list(output_dir.rglob('*.part')))
+
 
 if __name__ == '__main__':
     unittest.main()
