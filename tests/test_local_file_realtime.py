@@ -168,13 +168,16 @@ class RealtimeFilePacingTest(unittest.TestCase):
         pacer = _RealtimeAudioPacer(event, clock=clock, max_lag=0.1)
         clock.now = 1.0
 
-        with mock.patch('stream_translator_gpt.audio_getter.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.audio_getter.logger.info') as info:
             self.assertTrue(pacer.wait_for_block(SAMPLES_PER_FRAME))
             self.assertTrue(pacer.wait_for_block(SAMPLES_PER_FRAME))
 
         self.assertEqual(len(event.waits), 1)
         self.assertAlmostEqual(event.waits[0], SAMPLES_PER_FRAME / SAMPLE_RATE)
-        warning.assert_called_once()
+        info.assert_called_once_with(
+            'Realtime %s fell %.3fs behind; resuming without a catch-up burst',
+            'local file playback',
+            1.0 - SAMPLES_PER_FRAME / SAMPLE_RATE)
 
     def test_stop_event_interrupts_wait_without_emitting_block(self):
         clock = _FakeClock()
