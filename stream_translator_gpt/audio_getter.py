@@ -600,12 +600,17 @@ class DeviceAudioGetter(LoopWorkerBase):
                 raise RuntimeError("PyAudio is not installed. Please install it to use device capture.\n"
                                    "Debian/Ubuntu/Colab: apt install portaudio19-dev && pip install pyaudio") from e
 
-        self.pyaudio = pyaudio.PyAudio()
+        self.pyaudio = None
         self.pyaudio_module = pyaudio
+        self.requested_device_index = device_index
         self.device_index = device_index
         self.use_mic = use_mic
         self.interval = interval
         self.stream = None
+        self.device_name = None
+        self.native_rate = None
+        self.channels = None
+        self.read_size = None
         self.volume_factor = multiplier
         self.gain = gain
         self.recording_queue = queue.Queue(maxsize=8)
@@ -616,9 +621,24 @@ class DeviceAudioGetter(LoopWorkerBase):
         self.signal_received = threading.Event()
         self.finished = threading.Event()
         self.cleanup_lock = threading.Lock()
-        self.pyaudio_terminated = False
-        self.debug_dumper = None
+        self.pyaudio_terminated = True
+        self.debug_dumper = (_DebugAudioDumper(debug_audio_dir, debug_clip_duration, debug_max_clips)
+                             if debug_audio_dir else None)
 
+    def _initialize_pyaudio(self) -> None:
+        """Initialize PortAudio and resolve the device in the capture thread.
+
+        WASAPI initialization is thread-sensitive for some Windows endpoints. The
+        getter itself is constructed by the initializer pool, while ``loop`` runs
+        in a dedicated worker, so creating ``PyAudio`` in ``__init__`` can make a
+        later ``start_stream`` fail with ``paUnanticipatedHostError``.
+        """
+        if self.pyaudio is not None:
+            return
+
+        self.device_index = self.requested_device_index
+        self.pyaudio = self.pyaudio_module.PyAudio()
+        self.pyaudio_terminated = False
         try:
             device_info = self._select_device_info()
             self.device_name = device_info['name']
@@ -636,14 +656,13 @@ class DeviceAudioGetter(LoopWorkerBase):
                 logger.warning('PyAudio device %s reported no input channels; trying two channels', self.device_index)
                 self.channels = 2
             self.read_size = max(1, round(self.native_rate * self.interval))
-            self.debug_dumper = (_DebugAudioDumper(debug_audio_dir, debug_clip_duration, debug_max_clips)
-                                 if debug_audio_dir else None)
         except Exception:
             try:
                 self.pyaudio.terminate()
             except Exception:
                 logger.debug('Unable to terminate PyAudio after initialization failure', exc_info=True)
             finally:
+                self.pyaudio = None
                 self.pyaudio_terminated = True
             raise
 
@@ -748,9 +767,11 @@ class DeviceAudioGetter(LoopWorkerBase):
                     stream.close()
                 except Exception:
                     logger.debug('Unable to close PyAudio stream cleanly', exc_info=True)
-            if not self.pyaudio_terminated:
+            pyaudio = self.pyaudio
+            self.pyaudio = None
+            if pyaudio is not None and not self.pyaudio_terminated:
                 try:
-                    self.pyaudio.terminate()
+                    pyaudio.terminate()
                 except Exception:
                     logger.debug('Unable to terminate PyAudio cleanly', exc_info=True)
                 finally:
@@ -762,23 +783,24 @@ class DeviceAudioGetter(LoopWorkerBase):
             raise SystemExit(0)
         self.signal_received.set()
         self._queue_stop()
-        self._cleanup()
-        if self.debug_dumper is not None and not self.finished.wait(timeout=2.0):
-            logger.warning('Timed out waiting for PyAudio debug audio to finish writing')
+        if not self.finished.wait(timeout=2.0):
+            logger.warning('Timed out waiting for PyAudio device getter to stop cleanly')
         sys.exit(0)
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
-        logger.warning('Recording PyAudio device: %s (%s)', self.device_name, 'Input' if self.use_mic else 'Output')
-        logger.warning('Recording multiplier: %.6f (volume factor %.3f)', self.gain, self.volume_factor)
         buffer = np.array([], dtype=np.float32)
 
         try:
-            logger.debug('Opening audio device index=%s, native_rate=%d, channels=%d, read_size=%d, resample=%s',
-                         self.device_index, self.native_rate, self.channels, self.read_size,
-                         self.native_rate != SAMPLE_RATE)
             with self.cleanup_lock:
-                if self.stopping.is_set() or self.pyaudio_terminated:
+                if self.stopping.is_set():
                     return
+                self._initialize_pyaudio()
+                logger.warning('Recording PyAudio device: %s (%s)', self.device_name,
+                               'Input' if self.use_mic else 'Output')
+                logger.warning('Recording multiplier: %.6f (volume factor %.3f)', self.gain, self.volume_factor)
+                logger.debug('Opening audio device index=%s, native_rate=%d, channels=%d, read_size=%d, resample=%s',
+                             self.device_index, self.native_rate, self.channels, self.read_size,
+                             self.native_rate != SAMPLE_RATE)
                 stream = self.pyaudio.open(format=self.pyaudio_module.paFloat32,
                                            channels=self.channels,
                                            rate=self.native_rate,

@@ -154,6 +154,8 @@ class PyAudioCallbackTest(unittest.TestCase):
         with mock.patch('stream_translator_gpt.audio_getter.platform.system', return_value='Windows'):
             with mock.patch.dict(sys.modules, {'pyaudiowpatch': module}):
                 getter = DeviceAudioGetter(device_index=None, use_mic=False)
+                module.PyAudio.assert_not_called()
+                getter._initialize_pyaudio()
 
         self.assertEqual(getter.device_index, 7)
         self.assertEqual(getter.device_name, 'Fake Speakers [Loopback]')
@@ -165,12 +167,71 @@ class PyAudioCallbackTest(unittest.TestCase):
     def test_zero_channel_metadata_keeps_legacy_two_channel_fallback(self):
         with mock.patch('stream_translator_gpt.audio_getter.logger.warning') as warning:
             getter, instance, _ = _make_getter(channels=0)
+            getter._initialize_pyaudio()
 
         self.assertEqual(getter.device_index, 0)
         self.assertEqual(getter.channels, 2)
         warning.assert_called_once_with('PyAudio device %s reported no input channels; trying two channels', 0)
         getter._cleanup()
         self.assertEqual(instance.terminated, 1)
+
+    def test_portaudio_is_initialized_in_the_capture_thread(self):
+        main_thread_id = threading.get_ident()
+        instances = []
+        device_info = {
+            'name': 'Thread-bound WASAPI loopback',
+            'defaultSampleRate': SAMPLE_RATE,
+            'maxInputChannels': 1,
+        }
+
+        class ThreadBoundPyAudio(_FakePyAudio):
+
+            def __init__(self):
+                super().__init__(device_info, [(b'', 0)])
+                self.initialized_thread_id = threading.get_ident()
+                self.open_thread_id = None
+                self.terminate_thread_id = None
+
+            def open(self, **kwargs):
+                self.open_thread_id = threading.get_ident()
+                if self.open_thread_id != self.initialized_thread_id:
+                    raise OSError(-9999, 'Unanticipated host error')
+                return super().open(**kwargs)
+
+            def terminate(self):
+                self.terminate_thread_id = threading.get_ident()
+                super().terminate()
+
+        module = types.ModuleType('pyaudio')
+        module.paFloat32 = 1
+        module.paContinue = 2
+        module.paComplete = 3
+        module.paAbort = 4
+
+        def create_pyaudio():
+            instance = ThreadBoundPyAudio()
+            instances.append(instance)
+            return instance
+
+        module.PyAudio = create_pyaudio
+        with mock.patch('stream_translator_gpt.audio_getter.platform.system', return_value='Linux'):
+            with mock.patch.dict(sys.modules, {'pyaudio': module}):
+                getter = DeviceAudioGetter(device_index=0, use_mic=True)
+
+        self.assertEqual(instances, [])
+        output_queue = queue.SimpleQueue()
+        loop_thread = threading.Thread(target=getter.loop, args=(output_queue,))
+        loop_thread.start()
+        loop_thread.join(timeout=2)
+
+        self.assertFalse(loop_thread.is_alive())
+        self.assertEqual(len(instances), 1)
+        self.assertNotEqual(instances[0].initialized_thread_id, main_thread_id)
+        self.assertEqual(instances[0].initialized_thread_id, loop_thread.ident)
+        self.assertEqual(instances[0].open_thread_id, loop_thread.ident)
+        self.assertEqual(instances[0].terminate_thread_id, loop_thread.ident)
+        self.assertEqual(instances[0].terminated, 1)
+        self.assertEqual(_drain(output_queue), [None])
 
     def test_callback_copies_input_reports_status_and_uses_callback_stream(self):
         getter, instance, module = _make_getter(interval=SAMPLES_PER_FRAME / SAMPLE_RATE)
