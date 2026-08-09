@@ -6,6 +6,7 @@ import time
 import unittest
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 from stream_translator_gpt import logging_utils
 from stream_translator_gpt.common import ClientPool, start_daemon_thread
@@ -125,19 +126,42 @@ class LoggingUtilsTest(unittest.TestCase):
     def test_worker_exception_is_logged_and_propagates_end_of_stream(self):
         output = io.StringIO()
         output_queue = queue.SimpleQueue()
+        error_callback = mock.Mock()
         configure_logging(2, stream=output)
 
         def fail(output_queue):
             raise RuntimeError('worker boom')
 
-        thread = start_daemon_thread(fail, name='test-worker', output_queue=output_queue)
+        thread = start_daemon_thread(fail,
+                                     name='test-worker',
+                                     on_error=error_callback,
+                                     output_queue=output_queue)
         thread.join(timeout=1)
         shutdown_logging()
 
         self.assertFalse(thread.is_alive())
         self.assertIsNone(output_queue.get_nowait())
+        error_callback.assert_called_once_with()
         self.assertEqual(output.getvalue().count('Unhandled exception in worker: test-worker'), 1)
         self.assertEqual(output.getvalue().count('RuntimeError: worker boom'), 1)
+
+    def test_worker_error_callback_failure_is_contained(self):
+        output = io.StringIO()
+        configure_logging(2, stream=output)
+
+        def fail():
+            raise RuntimeError('worker boom')
+
+        def callback_fail():
+            raise RuntimeError('callback boom')
+
+        thread = start_daemon_thread(fail, name='test-worker', on_error=callback_fail)
+        thread.join(timeout=1)
+        shutdown_logging()
+
+        self.assertFalse(thread.is_alive())
+        self.assertIn('Worker error callback failed: test-worker', output.getvalue())
+        self.assertIn('RuntimeError: callback boom', output.getvalue())
 
     def test_verbosity_argument_compatibility(self):
         self.assertEqual(verbosity_from_argv(['-v']), 1)

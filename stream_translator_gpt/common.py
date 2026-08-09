@@ -104,7 +104,7 @@ class LogTime:
         return False
 
 
-def start_daemon_thread(func, *args, name=None, **kwargs):
+def start_daemon_thread(func, *args, name=None, on_error=None, **kwargs):
 
     def wrapper():
         logger.debug('Worker started: %s', threading.current_thread().name)
@@ -112,6 +112,11 @@ def start_daemon_thread(func, *args, name=None, **kwargs):
             func(*args, **kwargs)
         except Exception:
             logger.exception('Unhandled exception in worker: %s', threading.current_thread().name)
+            if on_error is not None:
+                try:
+                    on_error()
+                except Exception:
+                    logger.exception('Worker error callback failed: %s', threading.current_thread().name)
             output_queue = kwargs.get('output_queue', None)
             if output_queue is not None:
                 output_queue.put(None)

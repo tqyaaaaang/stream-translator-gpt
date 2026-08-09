@@ -142,8 +142,14 @@ class WaitForVideoWiringTest(unittest.TestCase):
         self.assertNotIn('--wait-for-video', command)
         self.assertNotIn('--live-from-start', command)
         self.assertIn('--quiet', command)
+        diagnostic_index = command.index('--print-to-file')
+        diagnostic_template = command[diagnostic_index + 1]
+        self.assertTrue(diagnostic_template.startswith('before_dl:format_id='))
+        self.assertNotIn('%(url)', diagnostic_template)
+        self.assertEqual(command[diagnostic_index + 2], os.path.join('workdir', 'yt-dlp-stream-format.txt'))
         self.assertEqual(popen_call.kwargs['stdout'], subprocess.PIPE)
         self.assertIsNone(popen_call.kwargs['stderr'])
+        self.assertEqual(popen_call.kwargs['start_new_session'], os.name != 'nt')
 
     def test_live_from_start_is_passed_once_and_coexists_with_waiting(self):
         popen_call = self._open_and_get_popen(30, live_from_start=True)

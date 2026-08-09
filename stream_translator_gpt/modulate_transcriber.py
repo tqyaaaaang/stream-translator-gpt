@@ -20,6 +20,7 @@ logger = logging.getLogger('main')
 
 MODULATE_STREAMING_ENDPOINT = 'wss://platform.modulate.ai/api/velma-2-stt-streaming'
 MODULATE_REPLAY_SECONDS = 120
+EARLY_INVALID_AUDIO_RETRY_SECONDS = 1.0
 NON_RETRYABLE_CLOSE_CODES = frozenset({
     1002,  # protocol error
     1003,  # unsupported / invalid configuration
@@ -265,6 +266,26 @@ class _AudioStreamState:
             return self._next_sample / SAMPLE_RATE
 
 
+class _AudioSendProgress:
+    """Track successfully queued WebSocket audio without retaining its contents."""
+
+    def __init__(self):
+        self._samples_sent = 0
+        self._lock = threading.Lock()
+
+    def record_payload(self, payload: bytes) -> tuple[bool, int, float]:
+        sample_count = len(payload) // np.dtype(np.float32).itemsize
+        with self._lock:
+            is_first = self._samples_sent == 0
+            self._samples_sent += sample_count
+            seconds_sent = self._samples_sent / SAMPLE_RATE
+        return is_first, sample_count, seconds_sent
+
+    def seconds(self) -> float:
+        with self._lock:
+            return self._samples_sent / SAMPLE_RATE
+
+
 class ModulateStreamingTranscriber(AudioTranscriber):
     """Stream raw getter audio directly to Modulate without VAD slicing."""
 
@@ -319,7 +340,9 @@ class ModulateStreamingTranscriber(AudioTranscriber):
         return f'{MODULATE_STREAMING_ENDPOINT}?{query}'
 
     def _connection_config(self) -> dict:
-        config = {'partial_results': True}
+        # The application doesn't consume speaker labels. Disabling diarization
+        # avoids unnecessary streaming work and reduces endpointing overhead.
+        config = {'partial_results': True, 'speaker_diarization': False}
         if self.language and self.language.lower() != 'auto':
             config['language'] = self.language
         custom_terms = [term.strip() for term in self.transcription_keywords.split(',') if term.strip()]
@@ -334,6 +357,10 @@ class ModulateStreamingTranscriber(AudioTranscriber):
             'ping_interval': 20,
             'ping_timeout': 20,
             'max_size': 1024 * 1024,
+            # Keep raw PCM framing simple and deterministic. Compression is
+            # optional in the WebSocket protocol and provides little value for
+            # this latency-sensitive stream.
+            'compression': None,
         }
         if self.proxy:
             kwargs['proxy'] = self.proxy
@@ -443,6 +470,10 @@ class ModulateStreamingTranscriber(AudioTranscriber):
         official_start = max(connection_offset + float(utterance.get('start_ms') or 0) / 1000, 0.0)
         duration = max(float(utterance.get('duration_ms') or 0) / 1000, 0.0)
         official_end = official_start + duration
+        stream_seconds = stream_state.seconds()
+        logger.debug('Received Modulate final utterance metadata; official_end_seconds=%.3f, '
+                     'stream_audio_seconds=%.3f, stream_minus_final_seconds=%.3f', official_end, stream_seconds,
+                     stream_seconds - official_end)
         stream_state.acknowledge(official_end)
         remainder = self.partial_splitter.finalize(utterance.get('text') or '')
 
@@ -458,7 +489,9 @@ class ModulateStreamingTranscriber(AudioTranscriber):
         return True
 
     def _receive_results(self, websocket, stream_state: _AudioStreamState, connection_offset: float,
-                         output_queue, progress_event: threading.Event) -> bool:
+                         output_queue, progress_event: threading.Event,
+                         send_progress: _AudioSendProgress, response_started_at: float) -> bool:
+        first_message = True
         while True:
             message = websocket.recv()
             if not isinstance(message, str):
@@ -469,6 +502,11 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                 raise ModulateStreamingError('Modulate returned malformed JSON') from None
 
             message_type = payload.get('type')
+            if first_message:
+                logger.debug('Received first Modulate server message; type=%s, sent_audio_seconds=%.3f, '
+                             'stream_audio_seconds=%.3f, response_elapsed_seconds=%.3f', message_type,
+                             send_progress.seconds(), stream_state.seconds(), time.monotonic() - response_started_at)
+                first_message = False
             if message_type == 'partial_utterance':
                 partial = payload.get('partial_utterance') or {}
                 self._handle_partial(partial, stream_state, connection_offset, output_queue)
@@ -492,15 +530,40 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                             float(payload.get('duration_ms') or 0) / 1000)
                 return True
             elif message_type == 'error':
-                progress_event.set()
+                sent_audio_seconds = send_progress.seconds()
+                safe_error = self._safe_server_error(payload.get('error'))
+                retryable = (safe_error.strip().casefold() == 'invalid input audio'
+                             and sent_audio_seconds <= EARLY_INVALID_AUDIO_RETRY_SECONDS)
+                logger.debug('Modulate server reported an error; sent_audio_seconds=%.3f, '
+                             'stream_audio_seconds=%.3f, retryable=%s', sent_audio_seconds,
+                             stream_state.seconds(), retryable)
                 raise ModulateStreamingError(
-                    f'Modulate API error: {self._safe_server_error(payload.get("error"))}')
+                    f'Modulate API error: {safe_error}', retryable=retryable)
             else:
                 logger.debug('Ignoring unknown Modulate message type: %s', message_type)
 
     @staticmethod
-    def _queue_error(error_queue: queue.SimpleQueue, exc: BaseException, retryable: bool):
-        error_queue.put((type(exc).__name__, retryable))
+    def _transport_diagnostic(exc: BaseException) -> str:
+        """Return numeric-only WebSocket diagnostics safe for logs/errors."""
+        details = []
+        status_code = getattr(getattr(exc, 'response', None), 'status_code', None)
+        if isinstance(status_code, int) and not isinstance(status_code, bool):
+            details.append(f'status_code={status_code}')
+        received_close = getattr(exc, 'rcvd', None)
+        sent_close = getattr(exc, 'sent', None)
+        close_code = getattr(received_close or sent_close, 'code', None)
+        if isinstance(close_code, int) and not isinstance(close_code, bool):
+            details.append(f'close_code={close_code}')
+        return ', '.join(details)
+
+    @classmethod
+    def _transport_error_label(cls, exc: BaseException) -> str:
+        diagnostic = cls._transport_diagnostic(exc)
+        return type(exc).__name__ + (f'; {diagnostic}' if diagnostic else '')
+
+    @classmethod
+    def _queue_error(cls, error_queue: queue.SimpleQueue, exc: BaseException, retryable: bool):
+        error_queue.put((cls._transport_error_label(exc), retryable))
 
     @staticmethod
     def _interrupt_websocket(websocket):
@@ -550,14 +613,39 @@ class ModulateStreamingTranscriber(AudioTranscriber):
             return True
         return None
 
+    @staticmethod
+    def _record_sent_payload(payload: bytes, source: str, stream_state: _AudioStreamState,
+                             send_progress: _AudioSendProgress):
+        is_first, sample_count, seconds_sent = send_progress.record_payload(payload)
+        if is_first:
+            logger.debug('Sent first Modulate audio payload; source=%s, bytes=%d, samples=%d, '
+                         'sent_audio_seconds=%.3f, stream_audio_seconds=%.3f', source, len(payload), sample_count,
+                         seconds_sent, stream_state.seconds())
+
     def _send_audio(self, websocket, input_queue, stream_state: _AudioStreamState, replay_payloads: list[bytes],
-                    replay_reaches_eof: bool, stop_event: threading.Event, error_queue: queue.SimpleQueue):
+                    replay_reaches_eof: bool, stop_event: threading.Event, error_queue: queue.SimpleQueue,
+                    send_progress: _AudioSendProgress, pace_replay: bool):
+        pacing_started_at = time.monotonic()
+        scheduled_samples = 0
+
+        def wait_for_payload(payload: bytes) -> bool:
+            nonlocal scheduled_samples
+            if not pace_replay:
+                return not stop_event.is_set()
+            scheduled_samples += len(payload) // np.dtype(np.float32).itemsize
+            deadline = pacing_started_at + scheduled_samples / SAMPLE_RATE
+            while (remaining := deadline - time.monotonic()) > 0:
+                if stop_event.wait(remaining):
+                    return False
+            return not stop_event.is_set()
+
         try:
             for payload in replay_payloads:
-                if stop_event.is_set():
+                if not wait_for_payload(payload):
                     return
                 try:
                     websocket.send(payload)
+                    self._record_sent_payload(payload, 'replay', stream_state, send_progress)
                 except Exception as exc:
                     self._queue_error(error_queue, exc, retryable=self._transport_retryability(exc) is True)
                     stop_event.set()
@@ -588,6 +676,7 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                 if sample_count == 0:
                     continue
                 websocket.send(payload)
+                self._record_sent_payload(payload, 'live', stream_state, send_progress)
         except Exception as exc:
             self._queue_error(error_queue, exc, retryable=self._transport_retryability(exc) is True)
             stop_event.set()
@@ -600,38 +689,57 @@ class ModulateStreamingTranscriber(AudioTranscriber):
             connector = connect
         return connector(self._connection_url(), **self._connection_kwargs())
 
-    def _run_connection(self, input_queue, output_queue, stream_state: _AudioStreamState):
+    def _run_connection(self, input_queue, output_queue, stream_state: _AudioStreamState,
+                        pace_replay: bool = False):
         stop_event = threading.Event()
         sender_errors = queue.SimpleQueue()
         sender_thread = None
         receive_error = None
         done_received = False
         progress_event = threading.Event()
+        send_progress = _AudioSendProgress()
 
         replay_start, replay_payloads, replay_reaches_eof = stream_state.replay_snapshot()
         connection_offset = replay_start / SAMPLE_RATE
+
+        # A final utterance can acknowledge the last retained sample just
+        # before the socket disappears, leaving only the server's ``done``
+        # message outstanding. Reopening a connection in that state would send
+        # config followed by an empty EOF frame, which the service can reject
+        # as "Invalid input audio". The acknowledged final is already
+        # authoritative, so there is no audio left to recover.
+        if replay_reaches_eof and not replay_payloads:
+            logger.debug('All Modulate audio was acknowledged before disconnect; skipping an empty reconnect')
+            return
 
         try:
             try:
                 connection = self._connect()
             except Exception as exc:
                 raise ModulateStreamingError(
-                    f'Failed to connect to Modulate streaming API ({type(exc).__name__})',
+                    f'Failed to connect to Modulate streaming API ({self._transport_error_label(exc)})',
                     retryable=self._transport_retryability(exc) is True) from None
 
             with connection as websocket:
+                response = getattr(websocket, 'response', None)
+                response_headers = getattr(response, 'headers', None)
+                negotiated_extensions = (response_headers.get('Sec-WebSocket-Extensions')
+                                         if response_headers is not None else None)
+                logger.debug('Modulate WebSocket connected; remote_address=%s, negotiated_extensions=%s',
+                             getattr(websocket, 'remote_address', None), negotiated_extensions or 'none')
                 websocket.send(json.dumps(self._connection_config(), ensure_ascii=False))
+                response_started_at = time.monotonic()
                 sender_thread = threading.Thread(
                     target=self._send_audio,
                     args=(websocket, input_queue, stream_state, replay_payloads, replay_reaches_eof, stop_event,
-                          sender_errors),
+                          sender_errors, send_progress, pace_replay),
                     name='modulate-audio-sender',
                     daemon=True,
                 )
                 sender_thread.start()
                 try:
                     done_received = self._receive_results(websocket, stream_state, connection_offset, output_queue,
-                                                          progress_event)
+                                                          progress_event, send_progress, response_started_at)
                 except Exception as exc:
                     receive_error = exc
                 finally:
@@ -642,9 +750,9 @@ class ModulateStreamingTranscriber(AudioTranscriber):
 
             sender_stuck = sender_thread is not None and sender_thread.is_alive()
             try:
-                sender_error_type, sender_error_retryable = sender_errors.get_nowait()
+                sender_error_label, sender_error_retryable = sender_errors.get_nowait()
             except queue.Empty:
-                sender_error_type = None
+                sender_error_label = None
                 sender_error_retryable = False
             if isinstance(receive_error, ModulateStreamingError) and not receive_error.retryable:
                 raise receive_error
@@ -655,15 +763,17 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                         f'Failed to process a Modulate streaming result ({type(receive_error).__name__})') from None
                 if not receive_retryability:
                     raise ModulateStreamingError(
-                        f'Modulate streaming request was rejected ({type(receive_error).__name__})') from None
-            if sender_error_type:
-                raise ModulateStreamingError(f'Failed to send audio to Modulate ({sender_error_type})',
+                        'Modulate streaming request was rejected '
+                        f'({self._transport_error_label(receive_error)})') from None
+            if sender_error_label:
+                raise ModulateStreamingError(f'Failed to send audio to Modulate ({sender_error_label})',
                                              retryable=sender_error_retryable) from None
             if receive_error:
                 if isinstance(receive_error, ModulateStreamingError):
                     raise receive_error
                 raise ModulateStreamingError(
-                    f'Modulate streaming connection closed unexpectedly ({type(receive_error).__name__})',
+                    'Modulate streaming connection closed unexpectedly '
+                    f'({self._transport_error_label(receive_error)})',
                     retryable=receive_retryability is True) from None
             if sender_stuck:
                 raise ModulateStreamingError('Modulate audio sender did not stop cleanly', retryable=True)
@@ -675,18 +785,44 @@ class ModulateStreamingTranscriber(AudioTranscriber):
             raise
         except Exception as exc:
             raise ModulateStreamingError(
-                f'Modulate streaming connection failed ({type(exc).__name__})',
+                f'Modulate streaming connection failed ({self._transport_error_label(exc)})',
                 retryable=self._transport_retryability(exc) is True,
                 made_progress=progress_event.is_set()) from None
 
+    @staticmethod
+    def _prime_stream(input_queue, stream_state: _AudioStreamState):
+        """Buffer the first usable block so a WebSocket never opens without audio ready."""
+        logger.debug('Waiting for initial Modulate audio before opening the streaming connection')
+        empty_blocks = 0
+        while True:
+            audio = input_queue.get()
+            if audio is None:
+                stream_state.mark_eof()
+                raise ModulateStreamingError(
+                    'Audio source ended before producing any samples for Modulate')
+            try:
+                payload, sample_count = stream_state.add_audio(audio)
+            except Exception as exc:
+                raise ModulateStreamingError(
+                    f'Invalid initial audio from upstream ({type(exc).__name__})') from None
+            if sample_count == 0:
+                empty_blocks += 1
+                continue
+            if not np.isfinite(np.frombuffer(payload, dtype='<f4')).all():
+                raise ModulateStreamingError('Invalid initial audio from upstream (non-finite samples)')
+            logger.debug('Buffered initial Modulate audio; bytes=%d, samples=%d, skipped_empty_blocks=%d',
+                         len(payload), sample_count, empty_blocks)
+            return
+
     def loop(self, input_queue, output_queue):
+        stream_state = _AudioStreamState()
+        self._prime_stream(input_queue, stream_state)
         logger.info('Connecting to Modulate streaming endpoint; proxy=%s, verify_ssl=%s', bool(self.proxy),
                     self.verify_ssl)
-        stream_state = _AudioStreamState()
         retry_count = 0
         while True:
             try:
-                self._run_connection(input_queue, output_queue, stream_state)
+                self._run_connection(input_queue, output_queue, stream_state, pace_replay=retry_count > 0)
                 break
             except ModulateStreamingError as exc:
                 if exc.made_progress:
