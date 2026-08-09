@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stream-translator-gpt"
-version = "0.0.0"
+dynamic = ["version"]
 authors = [
   { name="ion", email="ionicbond3@gmail.com" },
 ]
@@ -65,6 +65,9 @@ stream-translator-build-terms = "utils.term_utils:main"
 [project.urls]
 Homepage = "https://github.com/ionic-bond/stream-translator-gpt"
 Issues = "https://github.com/ionic-bond/stream-translator-gpt/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "stream_translator_gpt.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
