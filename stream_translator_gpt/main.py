@@ -271,7 +271,8 @@ class Config:
     """GPT parameter. Specifies processing priority tier. Options: auto / default / flex / priority."""
 
     debug_mode: bool = False
-    """Enable debug mode. Log messages sent to LLM and usage info after each translation call."""
+    """Enable debug mode and log usage info after each translation call. Full LLM prompts are logged only when
+    -vvv is also enabled."""
 
     verbose: Annotated[tyro.conf.UseCounterAction[int], tyro.conf.arg(aliases=('-v',))] = 0
     """Increase log verbosity. Use -v for INFO, -vv for DEBUG and -vvv for very detailed debug logging."""

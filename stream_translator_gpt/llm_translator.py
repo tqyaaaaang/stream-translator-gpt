@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from .common import TranslationTask, LoopWorkerBase, ClientPool, LogTime
+from .logging_utils import DDEBUG
 
 
 logger = logging.getLogger('main')
@@ -261,6 +262,12 @@ class LLMTranslator(LoopWorkerBase):
 
     def _expects_json_result(self) -> bool:
         return self.output_mode is not _TranslationOutputMode.PLAIN
+
+    def _log_prompt_messages(self, system_prompt: str, user_content: str) -> None:
+        if not self.debug_mode:
+            return
+        logger.log(DDEBUG, '[System] %s', system_prompt)
+        logger.log(DDEBUG, '[User] %s', user_content)
 
     def _validate_translation(self, translation: str) -> str:
         if not translation:
@@ -606,9 +613,7 @@ class GPTTranslator(LLMTranslator):
         client = ClientPool.get_openai_client()
 
         system_prompt, user_content = self._build_messages(translation_task)
-        if self.debug_mode:
-            logger.debug('[System] %s', system_prompt)
-            logger.debug('[User] %s', user_content)
+        self._log_prompt_messages(system_prompt, user_content)
 
         try:
             if self.api_mode == 'chat-completions':
@@ -661,9 +666,7 @@ class GeminiTranslator(LLMTranslator):
         client = ClientPool.get_google_client()
 
         system_prompt, user_content = self._build_messages(translation_task)
-        if self.debug_mode:
-            logger.debug('[System] %s', system_prompt)
-            logger.debug('[User] %s', user_content)
+        self._log_prompt_messages(system_prompt, user_content)
         messages = [{'role': 'user', 'parts': [{'text': user_content}]}]
 
         config_kwargs = {

@@ -1,3 +1,4 @@
+import io
 import json
 import unittest
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ import tyro
 
 from stream_translator_gpt.common import ClientPool, TranslationTask
 from stream_translator_gpt.llm_translator import GPTTranslator, _parse_json_completion
+from stream_translator_gpt.logging_utils import configure_logging, shutdown_logging
 from stream_translator_gpt.main import Config, _validate_and_normalize
 
 
@@ -94,6 +96,26 @@ class GPTResponsesTranslatorTest(unittest.TestCase):
         self.assertNotIn('prompt_cache_options', request)
         self.assertNotIn('prompt_cache_breakpoint', request['input'][0]['content'][0])
         json.dumps(request)
+
+    def test_full_prompt_content_is_only_logged_at_ddebug(self):
+        translator = self._translator(debug_mode=True)
+        debug_output = io.StringIO()
+        ddebug_output = io.StringIO()
+
+        try:
+            configure_logging(2, stream=debug_output)
+            translator._log_prompt_messages('SYSTEM_PROMPT_SENTINEL', 'USER_PROMPT_SENTINEL')
+            shutdown_logging()
+
+            configure_logging(3, stream=ddebug_output)
+            translator._log_prompt_messages('SYSTEM_PROMPT_SENTINEL', 'USER_PROMPT_SENTINEL')
+            shutdown_logging()
+        finally:
+            shutdown_logging()
+
+        self.assertNotIn('PROMPT_SENTINEL', debug_output.getvalue())
+        self.assertIn(':DDEBUG:main: [System] SYSTEM_PROMPT_SENTINEL', ddebug_output.getvalue())
+        self.assertIn(':DDEBUG:main: [User] USER_PROMPT_SENTINEL', ddebug_output.getvalue())
 
     def test_explicit_cache_marks_only_the_complete_stable_prefix(self):
         responses = _FakeResponses(outputs=['一', '二'])

@@ -236,7 +236,7 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--reasoning-effort`               | 自动（最低支持级别）           | GPT 参数。控制推理模型的推理深度。可选：none / minimal / low / medium / high / xhigh / max。                                                                                  |
 | `--verbosity`                      |                                | GPT 参数。控制回复的详细程度。可选：low / medium / high。                                                                                                                     |
 | `--service-tier`                   |                                | GPT 参数。指定处理优先级层级。可选：auto / default / flex / priority。                                                                                                        |
-| `--debug-mode`                     |                                | 启用调试模式。每次翻译调用后打印发送给 LLM 的消息和用量信息。                                                                                                                 |
+| `--debug-mode`                     |                                | 启用调试模式并在每次翻译调用后记录用量信息。完整 LLM prompt 仅在同时启用 `-vvv` 时记录。                                                                                         |
 | `--processing-proxy`               |                                | 为 Whisper/GPT API 指定 HTTP/HTTPS/SOCKS 代理（Gemini 目前不支持在程序内指定代理），例如 http://127.0.0.1:7890。                                                              |
 | **输出选项**                       |
 | `--output-timestamps`              |                                | 输出文本时附带时间戳。                                                                                                                                                        |
