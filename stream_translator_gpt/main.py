@@ -343,6 +343,21 @@ def _create_audio_getter(config: Config):
     return LocalFileAudioGetter(file_path=config.url, realtime=config.local_file_mode == 'realtime')
 
 
+def _transcription_engine_label(config: Config) -> str:
+    """Return the concise user-facing name of the selected transcription backend."""
+    if config.use_modulate_transcription_api:
+        return 'Modulate'
+    if config.use_simul_streaming:
+        return 'SimulStreaming'
+    if config.use_faster_whisper:
+        return 'Faster Whisper'
+    if config.use_openai_transcription_api:
+        return 'OpenAI'
+    if config.use_hf_asr:
+        return 'Hugging Face ASR'
+    return 'Whisper'
+
+
 def run(config: Config):
     """Run the transcription / translation pipeline until the input is exhausted."""
     logger.info('Initializing transcription and translation pipeline')
@@ -434,6 +449,7 @@ def run(config: Config):
                 logger.debug('Selected Whisper transcription backend')
                 return OpenaiWhisper(model=config.model, language=config.language, **common_args)
 
+        logger.warning('Using %s as transcription engine.', _transcription_engine_label(config))
         transcriber_future = executor.submit(init_transcriber)
 
         def init_translator():

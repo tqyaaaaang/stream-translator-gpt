@@ -255,7 +255,6 @@ class RemoteOpenaiTranscriber(AudioTranscriber):
 
     def __init__(self, model: str, language: str, proxy: str, **kwargs) -> None:
         super().__init__(language=language, **kwargs)
-        logger.warning('Using %s API as transcription engine.', model)
         self.model = model
 
     def transcribe(self, audio: np.ndarray, history_context: str | None = None) -> tuple[str, list | None]:

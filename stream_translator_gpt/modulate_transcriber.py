@@ -680,7 +680,6 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                 made_progress=progress_event.is_set()) from None
 
     def loop(self, input_queue, output_queue):
-        logger.warning('Using Modulate multilingual streaming transcription without VAD.')
         logger.info('Connecting to Modulate streaming endpoint; proxy=%s, verify_ssl=%s', bool(self.proxy),
                     self.verify_ssl)
         stream_state = _AudioStreamState()
