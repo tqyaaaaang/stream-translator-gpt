@@ -216,7 +216,7 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--openai-transcription-model`     | gpt-transcribe                 | OpenAI 转录模型。普通转录推荐使用 `gpt-transcribe`；也支持 `whisper-1`、`gpt-4o-mini-transcribe` 和 `gpt-4o-transcribe`。                                                     |
 | `--use-hf-asr`                     |                                | 使用 HuggingFace ASR 模型，用 `--model` 指定模型 ID。需要 `pip install stream-translator-gpt[hf_asr]`。                                                                       |
 | `--transcription-filters`          | emoji_filter,repetition_filter | 应用于转录结果的过滤器，用 "," 分隔。目前提供 emoji_filter 和 repetition_filter。                                                                                             |
-| `--no-language-based-filter`       |                                | 禁用根据 ASR 语言自动挂载的语言过滤器（默认开启）。目前提供英文、中文和日文的过滤器。                                                                                         |
+| `--language-filters`               |                                | 启用指定语言的转录过滤器，用英文逗号分隔。支持 `en`/`english`、`ja`/`japanese` 和 `zh`/`chinese`（包括 `zh-cn`、`zh-tw`）等别名；不传时默认关闭。                                |
 | `--transcription-keywords`         |                                | 逗号分隔的转录关键词。`gpt-transcribe` 会作为 `keywords` 发送，其他 Whisper 后端会作为初始 prompt 使用。旧的 `--transcription-initial-prompt` 仍可用，但已弃用。              |
 | `--transcription-context`          |                                | 启用转录中的上下文传递，只保留上一条结果；SimulStreaming 和 HuggingFace ASR 不支持文本上下文（默认关闭）。                                                                    |
 | **翻译选项**                       |

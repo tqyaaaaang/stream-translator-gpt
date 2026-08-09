@@ -115,6 +115,49 @@ INPUT_KEYS = [
 ]
 
 
+LANGUAGE_FILTER_ALIASES = {
+    "en": "en",
+    "english": "en",
+    "ja": "ja",
+    "japanese": "ja",
+    "zh": "zh",
+    "chinese": "zh",
+    "zh-cn": "zh",
+    "zh-tw": "zh",
+}
+
+
+def normalize_language_filters(value, transcription_language="auto"):
+    """Normalize current selections and migrate the former boolean preset value."""
+    if isinstance(value, bool):
+        if not value:
+            return []
+        language = str(transcription_language or "auto").strip().casefold().replace("_", "-")
+        values = ["en", "ja", "zh"] if language in ("", "auto", "none") else [language]
+    elif isinstance(value, str):
+        values = value.split(",")
+    else:
+        values = value or []
+
+    normalized = []
+    for item in values:
+        canonical = LANGUAGE_FILTER_ALIASES.get(str(item).strip().casefold().replace("_", "-"))
+        if canonical and canonical not in normalized:
+            normalized.append(canonical)
+    return normalized
+
+
+def migrate_preset_data(data):
+    """Migrate configuration values whose WebUI representation has changed."""
+    if not isinstance(data, dict):
+        return data
+    if "filter_language_based" in data:
+        data = data.copy()
+        data["filter_language_based"] = normalize_language_filters(
+            data["filter_language_based"], data.get("language", "auto"))
+    return data
+
+
 def get_preset_list():
     """Get list of all presets: bundled 'default' + user presets."""
     presets = ["default"]  # Always include bundled default
@@ -132,13 +175,13 @@ def load_preset_data(preset_name):
         if preset_name == "default":
             logger.info("Loading bundled preset from: %s", BUNDLED_DEFAULT_PATH)
             with open(BUNDLED_DEFAULT_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                return migrate_preset_data(json.load(f))
         else:
             filename = preset_name if preset_name.endswith(".json") else preset_name + ".json"
             path = os.path.join(USER_PRESETS_DIR, filename)
             logger.info("Loading user preset from: %s", path)
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                return migrate_preset_data(json.load(f))
     except Exception:
         logger.exception("Error loading preset: %s", preset_name)
         return None
@@ -187,7 +230,7 @@ def is_default_value(key, value):
     untouched fields can pick up new defaults after an upgrade."""
     default_val = get_default(key)
     if isinstance(default_val, list):
-        default_val = ",".join(default_val)
+        return list(value or []) == default_val if isinstance(value, (list, tuple)) else False
     if value == default_val:
         return True
     try:
@@ -457,8 +500,9 @@ def build_translator_command(
     if transcription_filters:
         add_arg("--transcription-filters", ",".join(transcription_filters), "transcription_filters")
 
-    if not filter_language_based:
-        cmd.append("--no-language-based-filter")
+    language_filters = normalize_language_filters(filter_language_based, language)
+    if language_filters:
+        cmd.extend(["--language-filters", ",".join(language_filters)])
 
     add_arg("--transcription-keywords", transcription_keywords, "transcription_keywords")
 
@@ -935,8 +979,11 @@ with gr.Blocks() as demo:
             with gr.Accordion(i18n.get("filters"), open=False):
                 filter_emoji = gr.Checkbox(label="Emoji Filter", value=get_default("filter_emoji"))
                 filter_repetition = gr.Checkbox(label="Repetition Filter", value=get_default("filter_repetition"))
-                filter_language_based = gr.Checkbox(label=i18n.get("language_based_filter"),
-                                                    value=get_default("filter_language_based"))
+                filter_language_based = gr.CheckboxGroup(
+                    choices=[("English (en)", "en"), ("日本語 (ja)", "ja"), ("中文 (zh)", "zh")],
+                    label=i18n.get("language_based_filter"),
+                    info=i18n.get("language_based_filter_info"),
+                    value=get_default("filter_language_based"))
 
             processing_proxy_trans = gr.Textbox(label=i18n.get("processing_proxy"),
                                                 placeholder=i18n.get("processing_proxy_ph"))
@@ -1328,8 +1375,8 @@ with gr.Blocks() as demo:
     js_load = f"""
     (...args) => {{
         const keys = {json.dumps(INPUT_KEYS)};
-        
-        return args.map((defaultVal, index) => {{
+
+        const values = args.map((defaultVal, index) => {{
             const key = keys[index];
 
             const stored = localStorage.getItem(key);
@@ -1342,6 +1389,23 @@ with gr.Blocks() as demo:
                 return defaultVal;
             }}
         }});
+
+        const filterIndex = keys.indexOf("filter_language_based");
+        if (typeof values[filterIndex] === "boolean") {{
+            const language = String(values[keys.indexOf("language")] || "auto")
+                .toLowerCase().replaceAll("_", "-");
+            const aliases = {{
+                en: "en", english: "en", ja: "ja", japanese: "ja",
+                zh: "zh", chinese: "zh", "zh-cn": "zh", "zh-tw": "zh"
+            }};
+            values[filterIndex] = values[filterIndex]
+                ? ((language === "auto" || language === "none")
+                    ? ["en", "ja", "zh"]
+                    : (aliases[language] ? [aliases[language]] : []))
+                : [];
+            localStorage.setItem("filter_language_based", JSON.stringify(values[filterIndex]));
+        }}
+        return values;
     }}
     """
 

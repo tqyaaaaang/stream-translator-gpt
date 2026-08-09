@@ -27,7 +27,7 @@ def _transcriber(**overrides):
         'proxy': None,
         'language': None,
         'transcription_filters': '',
-        'language_based_filter': False,
+        'language_filters': None,
         'print_result': False,
         'output_timestamps': False,
         'use_history_context': False,

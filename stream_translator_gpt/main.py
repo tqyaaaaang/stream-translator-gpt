@@ -32,6 +32,17 @@ logger = logging.getLogger('main')
 
 DEFAULT_WAIT_FOR_VIDEO_SECONDS = 60
 
+_LEGACY_LANGUAGE_FILTER_ALIASES = {
+    'en': 'en',
+    'english': 'en',
+    'ja': 'ja',
+    'japanese': 'ja',
+    'zh': 'zh',
+    'chinese': 'zh',
+    'zh-cn': 'zh',
+    'zh-tw': 'zh',
+}
+
 
 @dataclasses.dataclass
 class Config:
@@ -198,9 +209,9 @@ class Config:
     transcription_filters: str = 'emoji_filter,repetition_filter'
     """Filters apply to transcription results, separated by ",". We provide emoji_filter and repetition_filter."""
 
-    language_based_filter: bool = True
-    """Language-based transcription filters (e.g. english_filter, chinese_filter, japanese_filter) selected by ASR
-    language. Disable with --no-language-based-filter."""
+    language_filters: str | None = None
+    """Comma-separated languages whose language-specific transcription filters should be enabled. Supported values
+    include en/english, ja/japanese, and zh/chinese/zh-cn/zh-tw. Disabled when omitted and independent of --language."""
 
     transcription_keywords: str | None = None
     """Comma-separated transcription keywords. OpenAI gpt-transcribe sends them as keywords; other Whisper backends
@@ -406,7 +417,7 @@ def run(config: Config):
         def init_transcriber():
             common_args = {
                 'transcription_filters': config.transcription_filters,
-                'language_based_filter': config.language_based_filter,
+                'language_filters': config.language_filters,
                 'print_result': config.show_transcribe_result,
                 'output_timestamps': config.output_timestamps,
                 'use_history_context': config.transcription_context,
@@ -551,10 +562,31 @@ def run(config: Config):
     logger.warning('All processing completed, program exits.')
 
 
+def _legacy_language_filters_from_argv(argv) -> str | None:
+    """Reproduce the former boolean filter selection for an explicitly supplied legacy flag."""
+    language = 'auto'
+    index = 0
+    while index < len(argv):
+        normalized_arg = argv[index].replace('_', '-')
+        if normalized_arg == '--language' and index + 1 < len(argv):
+            language = argv[index + 1]
+            index += 2
+            continue
+        if normalized_arg.startswith('--language='):
+            language = normalized_arg.split('=', 1)[1]
+        index += 1
+
+    language_key = str(language or 'auto').strip().casefold().replace('_', '-')
+    if language_key in ('', 'auto', 'none'):
+        return 'en,ja,zh'
+    return _LEGACY_LANGUAGE_FILTER_ALIASES.get(language_key)
+
+
 def _preprocess_deprecated_flags(argv):
     """Rewrite deprecated flags, optional values, and legacy verbosity arguments."""
     processed = []
     args = normalize_verbosity_args(argv)
+    legacy_language_filters = _legacy_language_filters_from_argv(args)
     index = 0
     while index < len(args):
         arg = args[index]
@@ -575,6 +607,19 @@ def _preprocess_deprecated_flags(argv):
             continue
         if normalized_arg.startswith('--wait-for-video='):
             processed.append(normalized_arg)
+            index += 1
+            continue
+        if normalized_arg == '--no-language-based-filter':
+            logger.warning('--no-language-based-filter is deprecated and no longer needed because language filters '
+                           'are disabled by default. Use --language-filters with an explicit language list to enable '
+                           'them.')
+            index += 1
+            continue
+        if normalized_arg == '--language-based-filter':
+            logger.warning('--language-based-filter is deprecated. Use --language-filters with an explicit language '
+                           'list instead.')
+            if legacy_language_filters:
+                processed.extend(('--language-filters', legacy_language_filters))
             index += 1
             continue
         if arg.replace('_', '-') == '--hide-transcribe-result':

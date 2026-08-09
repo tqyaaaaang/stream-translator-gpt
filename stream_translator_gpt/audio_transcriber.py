@@ -21,11 +21,11 @@ logger = logging.getLogger('main')
 
 class AudioTranscriber(LoopWorkerBase):
 
-    def __init__(self, language: str, transcription_filters: str, language_based_filter: bool, print_result: bool,
+    def __init__(self, language: str, transcription_filters: str, language_filters: str | None, print_result: bool,
                  output_timestamps: bool, use_history_context: bool, transcription_keywords: str | None):
         self.language = language
         self.transcription_filters = transcription_filters
-        self.language_based_filter = language_based_filter
+        self.language_filters = language_filters
         self.print_result = print_result
         self.output_timestamps = output_timestamps
         self.use_history_context = use_history_context
@@ -78,10 +78,9 @@ class AudioTranscriber(LoopWorkerBase):
                 if filter_func not in chain:
                     chain.append(filter_func)
 
-        if self.language_based_filter:
-            for lf in filters.get_language_filters(self.language):
-                if lf not in chain:
-                    chain.append(lf)
+        for language_filter in filters.get_language_filters(self.language_filters):
+            if language_filter not in chain:
+                chain.append(language_filter)
 
         logger.debug('Enabled transcription filters: %s', ', '.join(f.__name__ for f in chain) or 'none')
         return chain

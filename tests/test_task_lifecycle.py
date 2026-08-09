@@ -56,7 +56,7 @@ class TaskLifecycleTest(unittest.TestCase):
     def test_transcriber_advances_task_phase(self):
         transcriber = _FakeTranscriber(language='en',
                                        transcription_filters='',
-                                       language_based_filter=False,
+                                       language_filters=None,
                                        print_result=False,
                                        output_timestamps=False,
                                        use_history_context=False,

@@ -21,19 +21,28 @@ LANGUAGE_FILTERS = {
 }
 
 
-def get_language_filters(language: str = None) -> list:
-    if not language or language.lower() in ('auto', 'none'):
-        all_filters = []
-        for flist in LANGUAGE_FILTERS.values():
-            for f in flist:
-                if f not in all_filters:
-                    all_filters.append(f)
-        logger.debug('Selected language-based transcription filters: %s',
-                     ', '.join(f.__name__ for f in all_filters) or 'none')
-        return all_filters
+def get_language_filters(languages: str | None = None) -> list:
+    """Resolve an explicit comma-separated language list to transcription filters."""
+    selected_filters = []
+    unknown_languages = set()
 
-    lang_key = language.lower()
-    selected_filters = LANGUAGE_FILTERS.get(lang_key, [])
-    logger.debug('Selected language-based transcription filters for %s: %s', language,
-                 ', '.join(f.__name__ for f in selected_filters) or 'none')
+    for language in (languages or '').split(','):
+        language = language.strip()
+        if not language:
+            continue
+
+        lang_key = language.casefold().replace('_', '-')
+        language_filter_functions = LANGUAGE_FILTERS.get(lang_key)
+        if language_filter_functions is None:
+            if lang_key not in unknown_languages:
+                logger.warning('Unknown language filter %r, skipping.', language)
+                unknown_languages.add(lang_key)
+            continue
+
+        for filter_function in language_filter_functions:
+            if filter_function not in selected_filters:
+                selected_filters.append(filter_function)
+
+    logger.debug('Selected language-based transcription filters: %s',
+                 ', '.join(filter_function.__name__ for filter_function in selected_filters) or 'none')
     return selected_filters
