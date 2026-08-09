@@ -92,7 +92,7 @@
     "save_to_file_path": "保存到文件路径",
     "save_to_file_path_ph": "将结果追加到此文件，不会覆盖已有内容。",
     "output_file_timestamps": "输出文件包含时间戳",
-    "output_file_timestamps_info": "以 [开始时间戳] 文本 的格式为每条追加记录添加开始时间。",
+    "output_file_timestamps_info": "以 [开始时间戳] 文本 的格式分别为每行转录和翻译添加开始时间。",
     "discord_webhook_url": "Discord Webhook URL",
     "discord_webhook_url_ph": "如果设置，将发送结果文本到此 Discord 频道。",
     "telegram_token": "Telegram Token",

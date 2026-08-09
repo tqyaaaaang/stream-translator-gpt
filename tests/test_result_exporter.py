@@ -55,9 +55,10 @@ class ResultExporterTimestampTest(unittest.TestCase):
             (False, False, 'translated text', 'source text\ntranslated text'),
             (True, False, '01:02:03,4 --> 01:02:08,9 translated text',
              'source text\ntranslated text'),
-            (False, True, 'translated text', '[01:02:03,4] source text\ntranslated text'),
+            (False, True, 'translated text',
+             '[01:02:03,4] source text\n[01:02:03,4] translated text'),
             (True, True, '01:02:03,4 --> 01:02:08,9 translated text',
-             '[01:02:03,4] source text\ntranslated text'),
+             '[01:02:03,4] source text\n[01:02:03,4] translated text'),
         )
         for console_timestamps, file_timestamps, expected_console, expected_file in cases:
             with self.subTest(console_timestamps=console_timestamps, file_timestamps=file_timestamps):
@@ -81,12 +82,20 @@ class ResultExporterTimestampTest(unittest.TestCase):
         self.assertNotIn('[01:02:03,4]\n', file_payload)
         self.assertNotIn('01:02:08,9', file_payload)
         self.assertNotIn('-->', file_payload)
+        self.assertEqual(file_payload.count('[01:02:03,4] '), 2)
 
     def test_file_timestamp_formats_transcript_and_translation_combinations(self):
         cases = (
             (False, None, 'translated text', '[01:02:03,4] translated text'),
             (True, 'source text', None, '[01:02:03,4] source text'),
-            (True, 'source text', 'translated text', '[01:02:03,4] source text\ntranslated text'),
+            (True, 'source text', 'translated text',
+             '[01:02:03,4] source text\n[01:02:03,4] translated text'),
+            (False, None, 'translated line one\ntranslated line two',
+             '[01:02:03,4] translated line one\n[01:02:03,4] translated line two'),
+            (True, 'source text', 'translated line one\ntranslated line two',
+             '[01:02:03,4] source text\n'
+             '[01:02:03,4] translated line one\n'
+             '[01:02:03,4] translated line two'),
         )
         for include_transcript, transcript, translation, expected in cases:
             with self.subTest(include_transcript=include_transcript, translation=translation):
@@ -101,6 +110,26 @@ class ResultExporterTimestampTest(unittest.TestCase):
                 )
 
                 self.assertEqual(file_payload, expected)
+
+    def test_timestamped_transcript_and_multiline_translation_are_written_to_file(self):
+        exporter = self._exporter(file_timestamps=True, include_transcript=True)
+        input_queue = queue.SimpleQueue()
+        input_queue.put(self._task(translation='translated line one\ntranslated line two'))
+        input_queue.put(None)
+
+        with mock.patch('stream_translator_gpt.result_exporter.write_console_utf8'):
+            exporter.loop(input_queue)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir, 'results.txt')
+            exporter._write_message_to_file(str(output_path))
+
+            self.assertEqual(
+                output_path.read_text(encoding='utf-8'),
+                '[01:02:03,4] source text\n'
+                '[01:02:03,4] translated line one\n'
+                '[01:02:03,4] translated line two\n',
+            )
 
     def test_file_writer_appends_to_an_existing_file_by_default(self):
         exporter = self._exporter()
@@ -156,7 +185,7 @@ class ResultExporterTimestampTest(unittest.TestCase):
                 False,
                 True,
                 'source text\ntranslated text',
-                '[01:02:03,4] source text\ntranslated text',
+                '[01:02:03,4] source text\n[01:02:03,4] translated text',
             ),
             (
                 True,

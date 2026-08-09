@@ -92,7 +92,7 @@
     "save_to_file_path": "Save to File Path",
     "save_to_file_path_ph": "Append result text to this file without replacing existing content.",
     "output_file_timestamps": "Include Timestamps in Output File",
-    "output_file_timestamps_info": "Prefix each appended record with its start time as [start_timestamp] text.",
+    "output_file_timestamps_info": "Prefix every transcription and translation line with [start_timestamp].",
     "discord_webhook_url": "Discord Webhook URL",
     "discord_webhook_url_ph": "If set, will send the result text to this Discord channel.",
     "telegram_token": "Telegram Token",

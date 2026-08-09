@@ -92,7 +92,7 @@
     "save_to_file_path": "ファイル保存パス",
     "save_to_file_path_ph": "既存の内容を上書きせず、結果をこのファイルに追記します。",
     "output_file_timestamps": "出力ファイルにタイムスタンプを付加",
-    "output_file_timestamps_info": "各追記レコードの先頭に [開始タイムスタンプ] テキスト の形式で開始時刻を付けます。",
+    "output_file_timestamps_info": "文字起こし行と翻訳行のそれぞれに [開始タイムスタンプ] を付けます。",
     "discord_webhook_url": "Discord Webhook URL",
     "discord_webhook_url_ph": "設定した場合、結果のテキストがこのDiscordチャンネルに送信されます。",
     "telegram_token": "Telegram トークン",

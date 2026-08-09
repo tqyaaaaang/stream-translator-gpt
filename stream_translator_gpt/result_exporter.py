@@ -142,7 +142,7 @@ class ResultExporter(LoopWorkerBase):
                 break
             timestamp_text = f'{sec2str(task.time_range[0])} --> {sec2str(task.time_range[1])}'
             text_to_send = (task.transcript + '\n') if self.output_whisper_result else ''
-            text_for_file = text_to_send
+            file_contents = [task.transcript] if self.output_whisper_result else []
             if self.output_timestamps:
                 text_to_send = timestamp_text + '\n' + text_to_send
             if task.translation:
@@ -153,11 +153,14 @@ class ResultExporter(LoopWorkerBase):
                 text_to_print = text_to_print.strip()
                 write_console_utf8(f'{BOLD}{text_to_print}{ENDC}')
                 text_to_send += formatted_translation
-                text_for_file += formatted_translation
+                file_contents.append(formatted_translation)
             text_to_send = text_to_send.strip()
-            text_for_file = text_for_file.strip()
-            if self.output_file_timestamps and text_for_file:
-                text_for_file = f'[{sec2str(task.time_range[0])}] {text_for_file}'
+            if self.output_file_timestamps:
+                timestamp_prefix = f'[{sec2str(task.time_range[0])}] '
+                text_for_file = '\n'.join(timestamp_prefix + line.strip() for content in file_contents
+                                          for line in content.splitlines() if line.strip())
+            else:
+                text_for_file = '\n'.join(file_contents).strip()
             if self.cqhttp_queue:
                 self.cqhttp_queue.put(text_to_send)
             if self.discord_queue:

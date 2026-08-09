@@ -299,7 +299,7 @@ class Config:
     """Output timestamps in the console and non-file export channels. Does not affect file output."""
 
     output_file_timestamps: bool = False
-    """Prefix each file output record with its start timestamp in the form [HH:MM:SS,d] text."""
+    """Prefix each transcription and translation line written to a file with [HH:MM:SS,d]."""
 
     show_transcribe_result: bool = True
     """Print / export the transcription result. Disable with --no-show-transcribe-result to only output the
