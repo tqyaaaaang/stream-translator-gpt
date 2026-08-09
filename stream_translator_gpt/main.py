@@ -30,6 +30,8 @@ from . import __version__
 
 logger = logging.getLogger('main')
 
+DEFAULT_WAIT_FOR_VIDEO_SECONDS = 60
+
 
 @dataclasses.dataclass
 class Config:
@@ -83,6 +85,10 @@ class Config:
 
     input_proxy: str | None = None
     """Use the specified HTTP/HTTPS/SOCKS proxy for yt-dlp, e.g. http://127.0.0.1:7890."""
+
+    wait_for_video: Annotated[int | None, tyro.conf.arg(metavar='[SECONDS]')] = None
+    """Wait for a scheduled stream to become available. The value is yt-dlp's minimum number of seconds between
+    availability checks. Omit the option to disable waiting; using it without a value selects 60 seconds."""
 
     local_file_mode: Literal['offline', 'realtime'] = 'offline'
     """Choose how local files are read. Offline mode processes as fast as possible; realtime mode emits one second
@@ -330,6 +336,7 @@ def _create_audio_getter(config: Config):
             cookies=config.cookies,
             proxy=config.input_proxy,
             realtime=config.use_modulate_transcription_api,
+            wait_for_video=config.wait_for_video,
         )
     logger.debug('Selected local file audio input in %s mode', config.local_file_mode)
     return LocalFileAudioGetter(file_path=config.url, realtime=config.local_file_mode == 'realtime')
@@ -524,9 +531,31 @@ def run(config: Config):
 
 
 def _preprocess_deprecated_flags(argv):
-    """Rewrite deprecated flags and legacy numeric verbosity arguments."""
+    """Rewrite deprecated flags, optional values, and legacy verbosity arguments."""
     processed = []
-    for arg in normalize_verbosity_args(argv):
+    args = normalize_verbosity_args(argv)
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        normalized_arg = arg.replace('_', '-')
+        if normalized_arg == '--wait-for-video':
+            processed.append('--wait-for-video')
+            if index + 1 < len(args):
+                try:
+                    int(args[index + 1])
+                except ValueError:
+                    pass
+                else:
+                    processed.append(args[index + 1])
+                    index += 2
+                    continue
+            processed.append(str(DEFAULT_WAIT_FOR_VIDEO_SECONDS))
+            index += 1
+            continue
+        if normalized_arg.startswith('--wait-for-video='):
+            processed.append(normalized_arg)
+            index += 1
+            continue
         if arg.replace('_', '-') == '--hide-transcribe-result':
             logger.warning('--hide_transcribe_result is deprecated and will be removed in future versions. '
                            'Please use --no-show-transcribe-result instead.')
@@ -537,6 +566,7 @@ def _preprocess_deprecated_flags(argv):
             processed.append('--transcription-keywords')
         else:
             processed.append(arg)
+        index += 1
     return processed
 
 
@@ -653,6 +683,10 @@ def _validate_and_normalize(config: Config):
         if config.device_audio_debug_dir and config.device_audio_debug_max_clips <= 0:
             logger.error('Device audio debug max clips must be greater than zero')
             sys.exit(1)
+
+    if config.wait_for_video is not None and config.wait_for_video <= 0:
+        logger.error('Wait-for-video interval must be greater than zero')
+        sys.exit(1)
 
     transcription_encoder_flag_num = 0
     transcription_decoder_flag_num = 0

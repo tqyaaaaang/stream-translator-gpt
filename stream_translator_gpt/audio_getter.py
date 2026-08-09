@@ -150,13 +150,22 @@ def _transport(ytdlp_proc, ffmpeg_proc):
         _wait_for_process(ytdlp_proc, 'yt-dlp')
 
 
-def _open_stream(url: str, format: str, cookies: str, proxy: str, cwd: str):
-    cmd = [sys.executable, '-m', 'yt_dlp', url, '-f', format, '-o', '-', '-q']
+def _open_stream(url: str,
+                 format: str,
+                 cookies: str,
+                 proxy: str,
+                 cwd: str,
+                 wait_for_video: int | None = None):
+    # stdout is reserved exclusively for media bytes. Quiet mode suppresses
+    # progress/status text, while warnings and errors remain on inherited stderr.
+    cmd = [sys.executable, '-m', 'yt_dlp', url, '-f', format, '-o', '-', '--quiet']
+    if wait_for_video is not None:
+        cmd.extend(['--wait-for-video', str(wait_for_video)])
     if cookies:
         cmd.extend(['--cookies', cookies])
     if proxy:
         cmd.extend(['--proxy', proxy])
-    ytdlp_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, cwd=cwd)
+    ytdlp_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=None, cwd=cwd)
 
     try:
         ffmpeg_process = (ffmpeg.input('pipe:', loglevel='panic').output('pipe:',
@@ -188,12 +197,19 @@ def _open_stream(url: str, format: str, cookies: str, proxy: str, cwd: str):
 
 class StreamAudioGetter(LoopWorkerBase):
 
-    def __init__(self, url: str, format: str, cookies: str, proxy: str, realtime: bool = False) -> None:
+    def __init__(self,
+                 url: str,
+                 format: str,
+                 cookies: str,
+                 proxy: str,
+                 realtime: bool = False,
+                 wait_for_video: int | None = None) -> None:
         self.url = url
         self.format = format
         self.cookies = cookies
         self.proxy = proxy
         self.realtime = realtime
+        self.wait_for_video = wait_for_video
         self.temp_dir = tempfile.mkdtemp()
         self.ffmpeg_process = None
         self.ytdlp_process = None
@@ -219,8 +235,16 @@ class StreamAudioGetter(LoopWorkerBase):
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
         logger.warning('Opening stream: %s', redact_url(self.url))
+        if self.wait_for_video is not None:
+            logger.warning('Waiting for scheduled stream availability; yt-dlp minimum retry interval is %d second(s)',
+                           self.wait_for_video)
         self.ffmpeg_process, self.ytdlp_process, self.transport_thread = _open_stream(
-            self.url, self.format, self.cookies, self.proxy, self.temp_dir)
+            self.url,
+            self.format,
+            self.cookies,
+            self.proxy,
+            self.temp_dir,
+            wait_for_video=self.wait_for_video)
         if self.realtime:
             self.pacer = _RealtimeAudioPacer(self.stop_event, source_description='stream playback')
         _read_ffmpeg_loop(self.ffmpeg_process,

@@ -23,7 +23,8 @@ class StreamRealtimeConfigTest(unittest.TestCase):
                                           format=config.format,
                                           cookies=config.cookies,
                                           proxy=config.input_proxy,
-                                          realtime=True)
+                                          realtime=True,
+                                          wait_for_video=None)
 
     def test_non_modulate_url_keeps_legacy_unpaced_stream_behavior(self):
         sentinel = object()
@@ -37,7 +38,8 @@ class StreamRealtimeConfigTest(unittest.TestCase):
                                           format=config.format,
                                           cookies=config.cookies,
                                           proxy=config.input_proxy,
-                                          realtime=False)
+                                          realtime=False,
+                                          wait_for_video=None)
 
 
 class StreamRealtimeLoopTest(unittest.TestCase):
