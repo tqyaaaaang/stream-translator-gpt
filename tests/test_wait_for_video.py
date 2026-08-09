@@ -60,11 +60,39 @@ class WaitForVideoCliTest(unittest.TestCase):
                     _validate_and_normalize(config)
 
 
+class LiveFromStartCliTest(unittest.TestCase):
+
+    @staticmethod
+    def _parse(*args):
+        return tyro.cli(Config, args=_preprocess_deprecated_flags(args))
+
+    def test_option_is_a_disabled_by_default_bare_flag(self):
+        disabled = self._parse('https://example.test/live')
+        after_url = self._parse('https://example.test/live', '--live-from-start')
+        before_url = self._parse('--live-from-start', 'https://example.test/live')
+        before_option = self._parse('https://example.test/live', '--live-from-start', '--format', '251')
+
+        self.assertFalse(disabled.live_from_start)
+        self.assertTrue(after_url.live_from_start)
+        self.assertTrue(before_url.live_from_start)
+        self.assertTrue(before_option.live_from_start)
+        self.assertEqual(before_option.format, '251')
+
+    def test_option_does_not_accept_a_value(self):
+        invalid_options = [
+            ('--live-from-start', 'true'),
+            ('--live-from-start=true',),
+        ]
+        for option in invalid_options:
+            with self.subTest(option=option), self.assertRaises(SystemExit):
+                self._parse('https://example.test/live', *option)
+
+
 class WaitForVideoWiringTest(unittest.TestCase):
 
-    def test_stream_getter_receives_wait_interval(self):
+    def test_stream_getter_receives_wait_and_live_start_options(self):
         sentinel = object()
-        config = Config(url='https://example.test/live', wait_for_video=30)
+        config = Config(url='https://example.test/live', wait_for_video=30, live_from_start=True)
 
         with mock.patch('stream_translator_gpt.main.StreamAudioGetter', return_value=sentinel) as getter_cls:
             result = _create_audio_getter(config)
@@ -77,10 +105,11 @@ class WaitForVideoWiringTest(unittest.TestCase):
             proxy=config.input_proxy,
             realtime=False,
             wait_for_video=30,
+            live_from_start=True,
         )
 
     @staticmethod
-    def _open_and_get_popen(wait_for_video):
+    def _open_and_get_popen(wait_for_video, live_from_start=False):
         ytdlp_process = mock.Mock(pid=11)
         ffmpeg_process = mock.Mock(pid=12)
         ffmpeg_builder = mock.Mock()
@@ -100,6 +129,7 @@ class WaitForVideoWiringTest(unittest.TestCase):
                 'http://proxy.test',
                 'workdir',
                 wait_for_video=wait_for_video,
+                live_from_start=live_from_start,
             )
 
         transport_thread.start.assert_called_once_with()
@@ -110,6 +140,18 @@ class WaitForVideoWiringTest(unittest.TestCase):
         command = popen_call.args[0]
 
         self.assertNotIn('--wait-for-video', command)
+        self.assertNotIn('--live-from-start', command)
+        self.assertIn('--quiet', command)
+        self.assertEqual(popen_call.kwargs['stdout'], subprocess.PIPE)
+        self.assertIsNone(popen_call.kwargs['stderr'])
+
+    def test_live_from_start_is_passed_once_and_coexists_with_waiting(self):
+        popen_call = self._open_and_get_popen(30, live_from_start=True)
+        command = popen_call.args[0]
+
+        self.assertEqual(command.count('--live-from-start'), 1)
+        wait_index = command.index('--wait-for-video')
+        self.assertEqual(command[wait_index + 1], '30')
         self.assertIn('--quiet', command)
         self.assertEqual(popen_call.kwargs['stdout'], subprocess.PIPE)
         self.assertIsNone(popen_call.kwargs['stderr'])

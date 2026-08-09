@@ -90,6 +90,9 @@ class Config:
     """Wait for a scheduled stream to become available. The value is yt-dlp's minimum number of seconds between
     availability checks. Omit the option to disable waiting; using it without a value selects 60 seconds."""
 
+    live_from_start: Annotated[bool, tyro.conf.FlagCreatePairsOff] = False
+    """Ask yt-dlp to download a supported livestream from its beginning instead of the current live edge."""
+
     local_file_mode: Literal['offline', 'realtime'] = 'offline'
     """Choose how local files are read. Offline mode processes as fast as possible; realtime mode emits one second
     of decoded audio per second of wall-clock time."""
@@ -338,6 +341,7 @@ def _create_audio_getter(config: Config):
             proxy=config.input_proxy,
             realtime=config.use_modulate_transcription_api,
             wait_for_video=config.wait_for_video,
+            live_from_start=config.live_from_start,
         )
     logger.debug('Selected local file audio input in %s mode', config.local_file_mode)
     return LocalFileAudioGetter(file_path=config.url, realtime=config.local_file_mode == 'realtime')

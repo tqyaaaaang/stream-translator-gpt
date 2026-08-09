@@ -24,7 +24,8 @@ class StreamRealtimeConfigTest(unittest.TestCase):
                                           cookies=config.cookies,
                                           proxy=config.input_proxy,
                                           realtime=True,
-                                          wait_for_video=None)
+                                          wait_for_video=None,
+                                          live_from_start=False)
 
     def test_non_modulate_url_keeps_legacy_unpaced_stream_behavior(self):
         sentinel = object()
@@ -39,18 +40,20 @@ class StreamRealtimeConfigTest(unittest.TestCase):
                                           cookies=config.cookies,
                                           proxy=config.input_proxy,
                                           realtime=False,
-                                          wait_for_video=None)
+                                          wait_for_video=None,
+                                          live_from_start=False)
 
 
 class StreamRealtimeLoopTest(unittest.TestCase):
 
     @staticmethod
-    def _run_loop(realtime):
+    def _run_loop(realtime, live_from_start=False):
         getter = StreamAudioGetter(url='https://example.test/live',
                                    format='bestaudio',
                                    cookies='',
                                    proxy='',
-                                   realtime=realtime)
+                                   realtime=realtime,
+                                   live_from_start=live_from_start)
         ffmpeg_process = mock.Mock()
         ytdlp_process = mock.Mock()
         transport_thread = mock.Mock()
@@ -86,6 +89,19 @@ class StreamRealtimeLoopTest(unittest.TestCase):
         self.assertFalse(read_loop.call_args.kwargs.get('pad_final_block', False))
         self.assertIsNone(output.get_nowait())
         self.assertTrue(output.empty())
+
+    def test_live_from_start_is_forwarded_to_stream_opener(self):
+        getter, _, _, open_stream, _, _ = self._run_loop(realtime=False, live_from_start=True)
+
+        open_stream.assert_called_once_with(
+            getter.url,
+            getter.format,
+            getter.cookies,
+            getter.proxy,
+            getter.temp_dir,
+            wait_for_video=None,
+            live_from_start=True,
+        )
 
     def test_exit_signal_interrupts_realtime_pacer_wait(self):
         getter = StreamAudioGetter(url='https://example.test/live',

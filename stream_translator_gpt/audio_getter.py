@@ -155,12 +155,15 @@ def _open_stream(url: str,
                  cookies: str,
                  proxy: str,
                  cwd: str,
-                 wait_for_video: int | None = None):
+                 wait_for_video: int | None = None,
+                 live_from_start: bool = False):
     # stdout is reserved exclusively for media bytes. Quiet mode suppresses
     # progress/status text, while warnings and errors remain on inherited stderr.
     cmd = [sys.executable, '-m', 'yt_dlp', url, '-f', format, '-o', '-', '--quiet']
     if wait_for_video is not None:
         cmd.extend(['--wait-for-video', str(wait_for_video)])
+    if live_from_start:
+        cmd.append('--live-from-start')
     if cookies:
         cmd.extend(['--cookies', cookies])
     if proxy:
@@ -203,13 +206,15 @@ class StreamAudioGetter(LoopWorkerBase):
                  cookies: str,
                  proxy: str,
                  realtime: bool = False,
-                 wait_for_video: int | None = None) -> None:
+                 wait_for_video: int | None = None,
+                 live_from_start: bool = False) -> None:
         self.url = url
         self.format = format
         self.cookies = cookies
         self.proxy = proxy
         self.realtime = realtime
         self.wait_for_video = wait_for_video
+        self.live_from_start = live_from_start
         self.temp_dir = tempfile.mkdtemp()
         self.ffmpeg_process = None
         self.ytdlp_process = None
@@ -244,7 +249,8 @@ class StreamAudioGetter(LoopWorkerBase):
             self.cookies,
             self.proxy,
             self.temp_dir,
-            wait_for_video=self.wait_for_video)
+            wait_for_video=self.wait_for_video,
+            live_from_start=self.live_from_start)
         if self.realtime:
             self.pacer = _RealtimeAudioPacer(self.stop_event, source_description='stream playback')
         _read_ffmpeg_loop(self.ffmpeg_process,
