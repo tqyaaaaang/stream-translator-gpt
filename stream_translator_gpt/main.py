@@ -296,14 +296,17 @@ class Config:
     proxy within the program), e.g. http://127.0.0.1:7890."""
 
     output_timestamps: bool = False
-    """Output the timestamp of the text when outputting the text."""
+    """Output timestamps in the console and non-file export channels. Does not affect file output."""
+
+    output_file_timestamps: bool = False
+    """Prefix each file output record with its start timestamp in the form [HH:MM:SS,d] text."""
 
     show_transcribe_result: bool = True
     """Print / export the transcription result. Disable with --no-show-transcribe-result to only output the
     translation."""
 
     output_file_path: str | None = None
-    """If set, will save the result text to this path."""
+    """Append result text to this UTF-8 file. Existing content is preserved."""
 
     cqhttp_url: str | None = None
     """If set, will send the result text to this Cqhttp server."""
@@ -515,6 +518,7 @@ def run(config: Config):
             proxy=config.output_proxy,
             output_whisper_result=config.show_transcribe_result,
             output_timestamps=config.output_timestamps,
+            output_file_timestamps=config.output_file_timestamps,
         )
 
         audio_getter = audio_getter_future.result()
@@ -819,9 +823,6 @@ def _validate_and_normalize(config: Config):
         config.language = None
 
     if config.output_file_path:
-        if os.path.splitext(config.output_file_path)[1].lower() == '.srt' and not config.output_timestamps:
-            logger.warning('Output timestamps are required for .srt files, enabling them automatically.')
-            config.output_timestamps = True
         output_dir = os.path.dirname(os.path.abspath(config.output_file_path))
         if not os.path.isdir(output_dir):
             logger.error('Output directory does not exist: %s', output_dir)

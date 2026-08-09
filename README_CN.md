@@ -75,7 +75,7 @@ flowchart LR
 - **音频切片**：基于 [**Silero-VAD**](https://github.com/snakers4/silero-vad) 的动态阈值切片。Modulate 流式后端会直接处理 16 kHz 音频流并绕过 VAD。
 - **转录**：本地使用 [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition)，或远程调用 [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text) / [**Modulate Multilingual Transcription — Streaming**](https://docs.modulate.ai/api-reference/stt/streaming)。
 - **翻译**（可选）：OpenAI 的 [**GPT API**](https://platform.openai.com/docs/overview) 或 Google 的 [**Gemini API**](https://ai.google.dev/gemini-api/docs)。
-- **输出**：打印到**终端**、保存到**文件**（如 **.srt** 字幕），或发送到 **Discord** / **Telegram** / **Cqhttp**。
+- **输出**：打印到**终端**、追加到 UTF-8 **文本文件**，或发送到 **Discord** / **Telegram** / **Cqhttp**。
 
 ## 本地安装（进阶）
 
@@ -156,7 +156,7 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 - **Discord**: ```stream-translator-gpt {网址} --language {输入语言} --discord-webhook-url {你的 Discord webhook 地址}```
 - **Telegram**: ```stream-translator-gpt {网址} --language {输入语言} --telegram-token {你的 Telegram 令牌} --telegram-chat-id {你的 Telegram 聊天 id}```
 - **Cqhttp**: ```stream-translator-gpt {网址} --language {输入语言} --cqhttp-url {你的 Cqhttp 地址} --cqhttp-token {你的 Cqhttp 令牌}```
-- **.srt 字幕文件**（离线生成）: ```stream-translator-gpt {网址} --language {输入语言} --translation-prompt "把{输入语言}翻译成{输出语言}" --google-api-key {你的 Google key} --no-show-transcribe-result --retry-if-translation-fails --output-timestamps --output-file-path ./result.srt```
+- **带时间戳的文本文件**：```stream-translator-gpt {网址} --language {输入语言} --translation-prompt "把{输入语言}翻译成{输出语言}" --google-api-key {你的 Google key} --no-show-transcribe-result --retry-if-translation-fails --output-file-path ./result.txt --output-file-timestamps```
 
 ## 所有选项
 
@@ -240,9 +240,10 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--debug-mode`                     |                                | 启用调试模式并在每次翻译调用后记录用量信息。完整 LLM prompt 仅在同时启用 `-vvv` 时记录。                                                                                         |
 | `--processing-proxy`               |                                | 为 Whisper/GPT API 指定 HTTP/HTTPS/SOCKS 代理（Gemini 目前不支持在程序内指定代理），例如 http://127.0.0.1:7890。                                                              |
 | **输出选项**                       |
-| `--output-timestamps`              |                                | 输出文本时附带时间戳。                                                                                                                                                        |
+| `--output-timestamps`              |                                | 在控制台和非文件导出渠道中输出时间戳，不影响输出文件。                                                                                                                                        |
 | `--no-show-transcribe-result`      |                                | 隐藏转录结果（默认显示）。                                                                                                                                                    |
-| `--output-file-path`               |                                | 设置后，结果文本将保存到此路径。                                                                                                                                              |
+| `--output-file-path`               |                                | 将结果文本以 UTF-8 编码追加到此文件，并保留已有内容。                                                                                                                                       |
+| `--output-file-timestamps`         |                                | 在每条文件记录的同一行添加开始时间戳，格式为 `[开始时间戳] 文本`；不输出结束时间戳。                                                                                                                  |
 | `--cqhttp-url`                     |                                | 设置后，结果文本将发送到此 Cqhttp 服务器。                                                                                                                                    |
 | `--cqhttp-token`                   |                                | Cqhttp 的 Token，服务器端未设置的话无需填写。                                                                                                                                 |
 | `--discord-webhook-url`            |                                | 设置后，结果文本将发送到此 Discord 频道。                                                                                                                                     |

@@ -75,7 +75,7 @@ flowchart LR
 - **音声スライシング**：[**Silero-VAD**](https://github.com/snakers4/silero-vad) に基づく動的しきい値スライシング。Modulate ストリーミングバックエンドは 16 kHz 音声ストリームを直接処理し、VAD をバイパスします。
 - **文字起こし**：ローカルで [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition)、またはリモートで [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text) / [**Modulate Multilingual Transcription — Streaming**](https://docs.modulate.ai/api-reference/stt/streaming) を利用。
 - **翻訳**（オプション）：OpenAI の [**GPT API**](https://platform.openai.com/docs/overview) または Google の [**Gemini API**](https://ai.google.dev/gemini-api/docs)。
-- **出力**：**ターミナル**に出力、**ファイル**に保存（**.srt** 字幕など）、または **Discord** / **Telegram** / **Cqhttp** に送信。
+- **出力**：**ターミナル**に出力、UTF-8 **テキストファイル**に追記、または **Discord** / **Telegram** / **Cqhttp** に送信。
 
 ## ローカルインストール（上級者向け）
 
@@ -156,7 +156,7 @@ stream-translator-gpt {ファイルパス} --local-file-mode realtime --use-modu
 - **Discord**: ```stream-translator-gpt {URL} --language {入力言語} --discord-webhook-url {Discord webhook URL}```
 - **Telegram**: ```stream-translator-gpt {URL} --language {入力言語} --telegram-token {Telegram トークン} --telegram-chat-id {Telegram チャット ID}```
 - **Cqhttp**: ```stream-translator-gpt {URL} --language {入力言語} --cqhttp-url {Cqhttp URL} --cqhttp-token {Cqhttp トークン}```
-- **.srt 字幕ファイル**（オフライン生成）: ```stream-translator-gpt {URL} --language {入力言語} --translation-prompt "{入力言語}から{出力言語}に翻訳" --google-api-key {Google キー} --no-show-transcribe-result --retry-if-translation-fails --output-timestamps --output-file-path ./result.srt```
+- **タイムスタンプ付きテキストファイル**: ```stream-translator-gpt {URL} --language {入力言語} --translation-prompt "{入力言語}から{出力言語}に翻訳" --google-api-key {Google キー} --no-show-transcribe-result --retry-if-translation-fails --output-file-path ./result.txt --output-file-timestamps```
 
 ## すべてのオプション
 
@@ -240,9 +240,10 @@ stream-translator-gpt {ファイルパス} --local-file-mode realtime --use-modu
 | `--debug-mode`                     |                                | デバッグモードを有効化し、翻訳呼び出しごとに使用量情報を記録。完全な LLM プロンプトは `-vvv` も同時に有効な場合のみ記録。                                                                                                                    |
 | `--processing-proxy`               |                                | Whisper/GPT API に HTTP/HTTPS/SOCKS プロキシを指定（Gemini は現在プログラム内でのプロキシ指定に非対応）。例：http://127.0.0.1:7890。                                                                                       |
 | **出力オプション**                 |
-| `--output-timestamps`              |                                | テキスト出力時にタイムスタンプを付加。                                                                                                                                                                                     |
+| `--output-timestamps`              |                                | コンソールおよびファイル以外の出力先にタイムスタンプを付加します。出力ファイルには影響しません。                                                                                                                                                   |
 | `--no-show-transcribe-result`      |                                | 文字起こし結果を非表示にする（デフォルトで表示）。                                                                                                                                                                         |
-| `--output-file-path`               |                                | 設定すると、結果テキストをこのパスに保存します。                                                                                                                                                                           |
+| `--output-file-path`               |                                | 結果テキストを UTF-8 でこのファイルに追記し、既存の内容を保持します。                                                                                                                                                             |
+| `--output-file-timestamps`         |                                | 各ファイルレコードの同じ行に開始時刻を `[開始タイムスタンプ] テキスト` の形式で付けます。終了時刻は出力しません。                                                                                                                             |
 | `--cqhttp-url`                     |                                | 設定すると、結果テキストをこの Cqhttp サーバーに送信します。                                                                                                                                                               |
 | `--cqhttp-token`                   |                                | Cqhttp のトークン。サーバー側で設定されていなければ記入不要。                                                                                                                                                              |
 | `--discord-webhook-url`            |                                | 設定すると、結果テキストをこの Discord チャンネルに送信します。                                                                                                                                                            |

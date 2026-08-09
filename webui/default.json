@@ -51,6 +51,7 @@
     "show_timestamps": false,
     "hide_transcription": false,
     "output_file": "",
+    "output_file_timestamps": false,
     "output_proxy": "",
     "cqhttp_url": "",
     "cqhttp_token": "",

@@ -111,7 +111,8 @@ INPUT_KEYS = [
     "prompt_cache_key", "gemini_model", "history_size", "translation_timeout",
     "processing_proxy", "use_json_result", "retry_if_translation_fails", "show_timestamps", "hide_transcription",
     "output_file", "output_proxy", "cqhttp_url", "cqhttp_token", "discord_hook", "telegram_token", "telegram_chat_id",
-    "extra_cli_args", "modulate_api_key", "modulate_partial_cutoff_seconds", "use_translation_context"
+    "extra_cli_args", "modulate_api_key", "modulate_partial_cutoff_seconds", "use_translation_context",
+    "output_file_timestamps"
 ]
 
 
@@ -367,7 +368,8 @@ def build_translator_command(
         openai_translation_api='auto',
         openai_prompt_cache=False,
         prompt_cache_key=None,
-        use_translation_context=False):
+        use_translation_context=False,
+        output_file_timestamps=False):
     cmd = [sys.executable, "-u", "-m", "stream_translator_gpt"]
 
     def add_arg(flag, value, default_key=None):
@@ -542,6 +544,8 @@ def build_translator_command(
         cmd.append("--no-show-transcribe-result")
     if output_file:
         cmd.extend(["--output-file-path", output_file])
+        if output_file_timestamps:
+            cmd.append("--output-file-timestamps")
     if output_proxy:
         cmd.extend(["--output-proxy", output_proxy])
     if discord_hook:
@@ -644,7 +648,8 @@ def run_translator(
         openai_translation_api,
         openai_prompt_cache,
         prompt_cache_key,
-        use_translation_context=False):
+        use_translation_context=False,
+        output_file_timestamps=False):
     global process, is_running
 
     if is_running:
@@ -732,7 +737,8 @@ def run_translator(
                                           openai_translation_api=openai_translation_api,
                                           openai_prompt_cache=openai_prompt_cache,
                                           prompt_cache_key=prompt_cache_key,
-                                          use_translation_context=use_translation_context)
+                                          use_translation_context=use_translation_context,
+                                          output_file_timestamps=output_file_timestamps)
 
     if error:
         yield error
@@ -1075,6 +1081,10 @@ with gr.Blocks() as demo:
             with gr.Group():
                 output_file = gr.Textbox(label=i18n.get("save_to_file_path"),
                                          placeholder=i18n.get("save_to_file_path_ph"))
+                output_file_timestamps = gr.Checkbox(
+                    label=i18n.get("output_file_timestamps"),
+                    value=get_default("output_file_timestamps"),
+                    info=i18n.get("output_file_timestamps_info"))
 
             with gr.Group():
                 discord_hook = gr.Textbox(label=i18n.get("discord_webhook_url"),
@@ -1256,7 +1266,7 @@ with gr.Blocks() as demo:
                         discord_hook, telegram_token, telegram_chat_id, extra_cli_args, openai_key_trans,
                         openai_base_url_trans, device_audio_getter, device_multiplier, local_file_mode,
                         modulate_api_key, modulate_partial_cutoff_seconds, openai_translation_api,
-                        openai_prompt_cache, prompt_cache_key, use_translation_context
+                        openai_prompt_cache, prompt_cache_key, use_translation_context, output_file_timestamps
                     ],
                     outputs=output_box,
                     concurrency_limit=1,

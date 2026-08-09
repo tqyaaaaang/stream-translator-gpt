@@ -1,5 +1,4 @@
 import logging
-import os
 import queue
 from urllib.parse import urlencode
 
@@ -25,7 +24,7 @@ class ResultExporter(LoopWorkerBase):
 
     def __init__(self, cqhttp_url: str, cqhttp_token: str, discord_webhook_url: str, telegram_token: str,
                  telegram_chat_id: int, output_file_path: str, proxy: str, output_whisper_result: bool,
-                 output_timestamps: bool) -> None:
+                 output_timestamps: bool, output_file_timestamps: bool = False) -> None:
         self.proxies = {"http": proxy, "https": proxy} if proxy else None
         self.cqhttp_queue = None
         self.discord_queue = None
@@ -33,6 +32,7 @@ class ResultExporter(LoopWorkerBase):
         self.file_queue = None
         self.output_whisper_result = output_whisper_result
         self.output_timestamps = output_timestamps
+        self.output_file_timestamps = output_file_timestamps
 
         if cqhttp_url:
             logger.info('CQHTTP export channel enabled')
@@ -94,17 +94,36 @@ class ResultExporter(LoopWorkerBase):
                 logger.error('Telegram export failed (%s)', type(e).__name__)
 
     def _write_message_to_file(self, file_path: str):
-        if file_path:
-            if os.path.exists(file_path):
-                logger.debug('Replacing the existing output file')
-                os.remove(file_path)
+        leading_separator = ''
+        try:
+            with open(file_path, 'rb') as existing_file:
+                existing_file.seek(0, 2)
+                file_size = existing_file.tell()
+                if file_size > 0:
+                    existing_file.seek(-min(file_size, 4), 2)
+                    tail = existing_file.read()
+                    if self.output_file_timestamps:
+                        leading_separator = '' if tail.endswith((b'\n', b'\r')) else '\n'
+                    elif tail.endswith((b'\n\n', b'\r\r', b'\r\n\r\n')):
+                        leading_separator = ''
+                    elif tail.endswith((b'\n', b'\r')):
+                        leading_separator = '\n'
+                    else:
+                        leading_separator = '\n\n'
+            logger.debug('Appending to the existing output file')
+        except FileNotFoundError:
+            pass
+
         while True:
             text = self.file_queue.get()
             if text is None:
                 logger.debug('File export channel stopped')
                 break
             with open(file_path, 'a', encoding='utf-8') as f:
-                f.write(text + '\n\n')
+                if leading_separator:
+                    f.write(leading_separator)
+                    leading_separator = ''
+                f.write(text + ('\n' if self.output_file_timestamps else '\n\n'))
             logger.debug('Appended one result to the output file')
 
     def loop(self, input_queue: queue.SimpleQueue[TranslationTask]):
@@ -123,6 +142,7 @@ class ResultExporter(LoopWorkerBase):
                 break
             timestamp_text = f'{sec2str(task.time_range[0])} --> {sec2str(task.time_range[1])}'
             text_to_send = (task.transcript + '\n') if self.output_whisper_result else ''
+            text_for_file = text_to_send
             if self.output_timestamps:
                 text_to_send = timestamp_text + '\n' + text_to_send
             if task.translation:
@@ -133,7 +153,11 @@ class ResultExporter(LoopWorkerBase):
                 text_to_print = text_to_print.strip()
                 write_console_utf8(f'{BOLD}{text_to_print}{ENDC}')
                 text_to_send += formatted_translation
+                text_for_file += formatted_translation
             text_to_send = text_to_send.strip()
+            text_for_file = text_for_file.strip()
+            if self.output_file_timestamps and text_for_file:
+                text_for_file = f'[{sec2str(task.time_range[0])}] {text_for_file}'
             if self.cqhttp_queue:
                 self.cqhttp_queue.put(text_to_send)
             if self.discord_queue:
@@ -141,4 +165,4 @@ class ResultExporter(LoopWorkerBase):
             if self.telegram_queue:
                 self.telegram_queue.put(text_to_send)
             if self.file_queue:
-                self.file_queue.put(text_to_send)
+                self.file_queue.put(text_for_file)
