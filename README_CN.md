@@ -184,6 +184,7 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--input-proxy`                    |                                | 为 yt-dlp 指定 HTTP/HTTPS/SOCKS 代理，例如 http://127.0.0.1:7890。                                                                                                            |
 | `--wait-for-video [秒数]`          | 默认关闭；裸参数为 60          | 等待计划直播开始。该值是 yt-dlp 两次可用性检查之间的最短间隔；如果开播时间已知，yt-dlp 可能直接等待到该时间。不传时关闭等待，裸参数使用 60 秒。                               |
 | `--live-from-start`                | False                          | 请求 yt-dlp 从受支持直播的开头开始下载，而不是从当前直播位置开始。该 yt-dlp 功能仍属实验性功能，且仅适用于实现了它的提取器。                                               |
+| `--stream-format-diagnostic-file PATH` | 默认关闭                  | 让 yt-dlp 将所选流格式的白名单元数据写入用户指定路径，并在每条流开始时替换该文件。仅显式传入时启用；未指定时绝不会创建隐式诊断文件。                                      |
 | `--local-file-mode`                | offline                        | 本地文件播放模式：`offline` 会尽快处理，`realtime` 按墙钟时间每秒输出一秒解码音频。                                                                                          |
 | `--device-index`                   |                                | 需要录制的设备编号。不设置时使用系统默认录音设备。                                                                                                                            |
 | `--list-devices`                   |                                | 打印所有音频设备信息后退出。                                                                                                                                                  |
@@ -213,6 +214,7 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--modulate-partial-cutoff-seconds` | 10.0                           | 从当前未提交句子的第一个字开始超过该秒数后，在随后出现的第一个全角或半角标点处提交；此前的静音不计入等待时间。                                                                        |
 | `--modulate-reconnect-attempts`    | 3                              | Modulate 意外传输中断后的最大重连次数；显式认证、额度和 API 错误不会重试。                                                                                                    |
 | `--modulate-reconnect-backoff-seconds` | 1.0                        | 首次重连等待秒数；后续重试采用指数退避。重连成功后会重放上一个 final 结果之后收到的、最多 120 秒音频。                                                                       |
+| `--modulate-websocket-compression` | False                          | 为 Modulate 启用 WebSocket per-message deflate。压缩可减少网络带宽，但会增加 CPU 开销；默认不压缩，更适合 CPU 资源紧张而网络条件较好的部署。                                  |
 | `--openai-transcription-model`     | gpt-transcribe                 | OpenAI 转录模型。普通转录推荐使用 `gpt-transcribe`；也支持 `whisper-1`、`gpt-4o-mini-transcribe` 和 `gpt-4o-transcribe`。                                                     |
 | `--use-hf-asr`                     |                                | 使用 HuggingFace ASR 模型，用 `--model` 指定模型 ID。需要 `pip install stream-translator-gpt[hf_asr]`。                                                                       |
 | `--transcription-filters`          | emoji_filter,repetition_filter | 应用于转录结果的过滤器，用 "," 分隔。目前提供 emoji_filter 和 repetition_filter。                                                                                             |
