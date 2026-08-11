@@ -9,6 +9,7 @@ import signal
 import sys
 import time
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Literal
 
@@ -90,6 +91,9 @@ class Config:
 
     list_format: Annotated[bool, tyro.conf.FlagCreatePairsOff] = False
     """Print all available formats then exit."""
+
+    stream_format_diagnostic_file: str | None = None
+    """Write allowlisted yt-dlp format metadata, replacing this file for each stream. Disabled by default."""
 
     cookies: str | None = None
     """Used to open member-only stream, this parameter will be passed directly to yt-dlp."""
@@ -198,6 +202,9 @@ class Config:
 
     modulate_reconnect_backoff_seconds: float = 1.0
     """Initial delay before reconnecting to Modulate. Repeated failures use exponential backoff up to 30 seconds."""
+
+    modulate_websocket_compression: bool = False
+    """Enable per-message deflate compression for the Modulate WebSocket. Disabled by default."""
 
     openai_transcription_model: str = 'gpt-transcribe'
     """OpenAI's transcription model name, gpt-transcribe / whisper-1 / gpt-4o-mini-transcribe /
@@ -353,9 +360,12 @@ def _create_audio_getter(config: Config):
             format=config.format,
             cookies=config.cookies,
             proxy=config.input_proxy,
+            # yt-dlp can deliver complete HLS/DASH fragments in bursts. Preserve
+            # smooth playback pacing before forwarding them to a streaming API.
             realtime=config.use_modulate_transcription_api,
             wait_for_video=config.wait_for_video,
             live_from_start=config.live_from_start,
+            stream_format_diagnostic_file=config.stream_format_diagnostic_file,
         )
     logger.debug('Selected local file audio input in %s mode', config.local_file_mode)
     return LocalFileAudioGetter(file_path=config.url, realtime=config.local_file_mode == 'realtime')
@@ -435,6 +445,7 @@ def run(config: Config):
                     reconnect_backoff_seconds=config.modulate_reconnect_backoff_seconds,
                     proxy=config.processing_proxy,
                     verify_ssl=config.verify_ssl,
+                    websocket_compression=config.modulate_websocket_compression,
                     language=config.language,
                     **common_args,
                 )
@@ -530,39 +541,80 @@ def run(config: Config):
 
     if hasattr(audio_getter, '_exit_handler'):
         signal.signal(signal.SIGINT, audio_getter._exit_handler)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, audio_getter._exit_handler)
 
     logger.warning('Initialization complete, starting up...')
 
     # Start working
-    start_daemon_thread(audio_getter.loop, name='getter', output_queue=getter_to_slicer_queue)
+    pipeline_threads = []
+    pipeline_failed = threading.Event()
+
+    def stop_audio_getter():
+        stop = getattr(audio_getter, 'stop', None)
+        if callable(stop):
+            stop()
+
+    def handle_worker_error():
+        pipeline_failed.set()
+        stop_audio_getter()
+
+    getter_thread = start_daemon_thread(
+        audio_getter.loop,
+        name='getter',
+        on_error=handle_worker_error,
+        # Audio getters own their terminal sentinel on every exit path. Avoid
+        # publishing a duplicate when the getter raises into this wrapper.
+        output_eof_on_error=False,
+        output_queue=getter_to_slicer_queue,
+    )
+    pipeline_threads.append(getter_thread)
     if slicer:
-        start_daemon_thread(
+        pipeline_threads.append(start_daemon_thread(
             slicer.loop,
             name='slicer',
+            on_error=handle_worker_error,
             input_queue=getter_to_slicer_queue,
             output_queue=slicer_to_transcriber_queue,
-        )
-    start_daemon_thread(
+        ))
+    pipeline_threads.append(start_daemon_thread(
         transcriber.loop,
         name='transcriber',
+        on_error=handle_worker_error,
         input_queue=(getter_to_slicer_queue if config.use_modulate_transcription_api else slicer_to_transcriber_queue),
         output_queue=transcriber_to_translator_queue,
-    )
+    ))
     if translator:
-        start_daemon_thread(
+        pipeline_threads.append(start_daemon_thread(
             translator.loop,
             name='translator',
+            on_error=handle_worker_error,
             input_queue=transcriber_to_translator_queue,
             output_queue=translator_to_exporter_queue,
-        )
+        ))
     exporter_thread = start_daemon_thread(
         exporter.loop,
         name='exporter',
+        on_error=handle_worker_error,
         input_queue=translator_to_exporter_queue,
     )
+    pipeline_threads.append(exporter_thread)
 
     while exporter_thread.is_alive():
         time.sleep(1)
+    if getter_thread.is_alive():
+        logger.debug('Exporter stopped before the audio getter; requesting input shutdown')
+        stop_audio_getter()
+
+    shutdown_deadline = time.monotonic() + 10
+    for worker_thread in pipeline_threads:
+        worker_thread.join(timeout=max(0, shutdown_deadline - time.monotonic()))
+    remaining_workers = [worker_thread.name for worker_thread in pipeline_threads if worker_thread.is_alive()]
+    if remaining_workers:
+        pipeline_failed.set()
+        logger.error('Pipeline worker(s) did not stop within 10 seconds: %s', ', '.join(remaining_workers))
+    if pipeline_failed.is_set():
+        raise RuntimeError('Pipeline stopped because a worker failed')
     logger.warning('All processing completed, program exits.')
 
 

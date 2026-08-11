@@ -25,6 +25,7 @@ def _transcriber(**overrides):
         'reconnect_attempts': 0,
         'reconnect_backoff_seconds': 0.0,
         'proxy': None,
+        'websocket_compression': False,
         'language': None,
         'transcription_filters': '',
         'language_filters': None,
@@ -35,6 +36,17 @@ def _transcriber(**overrides):
     }
     kwargs.update(overrides)
     return ModulateStreamingTranscriber(**kwargs)
+
+
+def _audio_input_queue(*chunks, eof=True):
+    input_queue = queue.SimpleQueue()
+    if not chunks:
+        chunks = (np.zeros(512, dtype=np.float32), )
+    for chunk in chunks:
+        input_queue.put(chunk)
+    if eof:
+        input_queue.put(None)
+    return input_queue
 
 
 def _websocket_close(code: int) -> ConnectionClosedError:
@@ -252,13 +264,17 @@ class ModulateProtocolTest(unittest.TestCase):
         transcriber = _transcriber(language='ja', transcription_keywords='Modulate, Velma')
         self.assertEqual(transcriber._connection_config(), {
             'partial_results': True,
+            'speaker_diarization': False,
             'language': 'ja',
             'custom_terms': ['Modulate', 'Velma'],
         })
 
     def test_auto_language_is_omitted_for_server_side_detection(self):
         transcriber = _transcriber(language='auto')
-        self.assertEqual(transcriber._connection_config(), {'partial_results': True})
+        self.assertEqual(transcriber._connection_config(), {
+            'partial_results': True,
+            'speaker_diarization': False,
+        })
 
     def test_stream_sends_config_float32_audio_text_eof_and_waits_for_done(self):
         websocket = _FakeWebSocket([
@@ -282,10 +298,12 @@ class ModulateProtocolTest(unittest.TestCase):
         input_queue.put(None)
         output_queue = queue.SimpleQueue()
 
-        transcriber.loop(input_queue, output_queue)
+        with self.assertLogs('main', level='DEBUG') as captured:
+            transcriber.loop(input_queue, output_queue)
 
         config = json.loads(websocket.sent[0])
         self.assertTrue(config['partial_results'])
+        self.assertIsInstance(websocket.sent[1], bytes)
         binary_messages = [message for message in websocket.sent if isinstance(message, bytes)]
         self.assertEqual(len(binary_messages), 2)
         np.testing.assert_array_equal(np.frombuffer(binary_messages[0], dtype='<f4'), first.astype(np.float32))
@@ -294,6 +312,94 @@ class ModulateProtocolTest(unittest.TestCase):
         self.assertEqual(task.transcript, 'hello.')
         self.assertEqual(task.time_range, (0.0, 0.064))
         self.assertIsNone(output_queue.get_nowait())
+        logs = '\n'.join(captured.output)
+        self.assertIn('Sent first Modulate audio payload; source=replay', logs)
+        self.assertIn('Received first Modulate server message; type=utterance', logs)
+        self.assertIn('sent_audio_seconds=', logs)
+
+    def test_connection_waits_for_initial_audio_then_sends_config_before_buffered_payload(self):
+        first_audio = np.arange(512, dtype=np.float32)
+        get_started = threading.Event()
+        release_audio = threading.Event()
+        connector_called = threading.Event()
+
+        class DelayedInitialAudioQueue:
+
+            def __init__(self):
+                self.calls = 0
+                self.lock = threading.Lock()
+
+            def get(self, timeout=None):
+                with self.lock:
+                    call = self.calls
+                    self.calls += 1
+                if call == 0:
+                    get_started.set()
+                    if not release_audio.wait(timeout=2):
+                        raise TimeoutError('test did not release initial audio')
+                    return first_audio
+                return None
+
+        websocket = _FakeWebSocket([{'type': 'done', 'duration_ms': 32}])
+
+        def connector(*_args, **_kwargs):
+            connector_called.set()
+            return websocket
+
+        transcriber = _transcriber(connector=connector)
+        output_queue = queue.SimpleQueue()
+        errors = []
+
+        def run_transcriber():
+            try:
+                transcriber.loop(DelayedInitialAudioQueue(), output_queue)
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=run_transcriber)
+        worker.start()
+        self.assertTrue(get_started.wait(timeout=1))
+        self.assertFalse(connector_called.is_set())
+
+        release_audio.set()
+        worker.join(timeout=3)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(connector_called.is_set())
+        self.assertIsInstance(websocket.sent[0], str)
+        self.assertEqual(json.loads(websocket.sent[0])['partial_results'], True)
+        self.assertEqual(websocket.sent[1], first_audio.astype('<f4').tobytes())
+        self.assertEqual(websocket.sent[2], '')
+        self.assertIsNone(output_queue.get_nowait())
+
+    def test_empty_upstream_fails_before_connecting(self):
+        for upstream_values in ([None], [np.empty(0, dtype=np.float32), np.empty((0, 2)), None]):
+            with self.subTest(upstream_values=len(upstream_values)):
+                connector = mock.Mock()
+                transcriber = _transcriber(connector=connector)
+                input_queue = queue.SimpleQueue()
+                for value in upstream_values:
+                    input_queue.put(value)
+
+                with self.assertRaisesRegex(ModulateStreamingError,
+                                            'Audio source ended before producing any samples'):
+                    transcriber.loop(input_queue, queue.SimpleQueue())
+
+                connector.assert_not_called()
+
+    def test_server_error_log_reports_sent_audio_without_counting_as_progress(self):
+        websocket = _FakeWebSocket([{'type': 'error', 'error': 'Invalid input audio'}])
+        transcriber = _transcriber(connector=lambda *_args, **_kwargs: websocket)
+
+        with self.assertLogs('main', level='DEBUG') as captured, \
+                self.assertRaises(ModulateStreamingError) as raised:
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
+
+        self.assertFalse(raised.exception.made_progress)
+        logs = '\n'.join(captured.output)
+        self.assertIn('Received first Modulate server message; type=error', logs)
+        self.assertIn('Modulate server reported an error; sent_audio_seconds=0.032', logs)
 
     def test_duplicate_final_uuid_is_ignored(self):
         websocket = _FakeWebSocket([
@@ -367,11 +473,63 @@ class ModulateProtocolTest(unittest.TestCase):
 
         transcriber = _transcriber(api_key=key, reconnect_attempts=3, connector=connector, sleeper=lambda _: None)
         with self.assertRaises(ModulateStreamingError) as raised:
-            transcriber.loop(queue.SimpleQueue(), queue.SimpleQueue())
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
 
         self.assertEqual(len(calls), 1)
+        self.assertFalse(raised.exception.made_progress)
         self.assertNotIn(key, str(raised.exception))
         self.assertIn('<redacted>', str(raised.exception))
+
+    def test_connection_disables_websocket_compression_by_default(self):
+        kwargs = _transcriber()._connection_kwargs()
+
+        self.assertIn('compression', kwargs)
+        self.assertIsNone(kwargs['compression'])
+
+    def test_connection_enables_deflate_when_requested(self):
+        kwargs = _transcriber(websocket_compression=True)._connection_kwargs()
+
+        self.assertEqual(kwargs['compression'], 'deflate')
+
+    def test_transport_diagnostics_expose_only_numeric_status_and_close_codes(self):
+        transcriber = _transcriber()
+        secret = 'must-not-appear'
+        handshake = InvalidStatus(Response(429, secret, Headers({'X-Secret': secret})))
+        closed = ConnectionClosedError(Close(4029, secret), None)
+
+        self.assertEqual(transcriber._transport_error_label(handshake), 'InvalidStatus; status_code=429')
+        self.assertEqual(transcriber._transport_error_label(closed), 'ConnectionClosedError; close_code=4029')
+        self.assertEqual(transcriber._transport_error_label(OSError(secret)), 'OSError')
+        for label in (transcriber._transport_error_label(handshake),
+                      transcriber._transport_error_label(closed),
+                      transcriber._transport_error_label(OSError(secret))):
+            self.assertNotIn(secret, label)
+
+    def test_transport_diagnostics_ignore_non_integer_values_without_stringifying_them(self):
+        class DoNotStringify:
+
+            def __str__(self):
+                raise AssertionError('diagnostic value must not be stringified')
+
+        exc = OSError('safe')
+        exc.response = mock.Mock(status_code=DoNotStringify())
+        exc.rcvd = mock.Mock(code=DoNotStringify())
+
+        self.assertEqual(_transcriber()._transport_error_label(exc), 'OSError')
+
+    def test_invalid_audio_server_error_is_not_retried(self):
+        for chunks in ([np.zeros(512, dtype=np.float32)],
+                       [np.zeros(512, dtype=np.float32) for _ in range(40)]):
+            with self.subTest(audio_chunks=len(chunks)):
+                websocket = _FakeWebSocket([{'type': 'error', 'error': 'Invalid input audio'}])
+                connector = mock.Mock(return_value=websocket)
+                transcriber = _transcriber(reconnect_attempts=3, connector=connector, sleeper=lambda _delay: None)
+
+                with self.assertRaises(ModulateStreamingError) as raised:
+                    transcriber.loop(_audio_input_queue(*chunks), queue.SimpleQueue())
+
+                self.assertFalse(raised.exception.retryable)
+                connector.assert_called_once()
 
     def test_server_error_redacts_url_encoded_and_double_encoded_key(self):
         key = 'key with +?/ characters'
@@ -384,7 +542,7 @@ class ModulateProtocolTest(unittest.TestCase):
         transcriber = _transcriber(api_key=key, connector=lambda *_args, **_kwargs: websocket)
 
         with self.assertRaises(ModulateStreamingError) as raised:
-            transcriber.loop(queue.SimpleQueue(), queue.SimpleQueue())
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
 
         error_text = str(raised.exception)
         self.assertNotIn(key, error_text)
@@ -449,6 +607,46 @@ class ModulateProtocolTest(unittest.TestCase):
 
 
 class ModulateReconnectTest(unittest.TestCase):
+
+    def test_disconnect_after_eof_and_full_ack_does_not_open_empty_retry(self):
+        class FullyAcknowledgedThenDisconnect(_FakeWebSocket):
+
+            def __init__(self):
+                super().__init__([{
+                    'type': 'utterance',
+                    'utterance': {
+                        'utterance_uuid': 'fully-acknowledged',
+                        'text': 'complete.',
+                        'start_ms': 0,
+                        'duration_ms': 32,
+                    },
+                }])
+
+            def recv(self):
+                if not self.eof_sent.wait(timeout=2):
+                    raise TimeoutError('test sender never sent EOF')
+                if self.messages:
+                    return json.dumps(self.messages.pop(0))
+                raise ConnectionError('connection dropped after acknowledging all audio')
+
+        websocket = FullyAcknowledgedThenDisconnect()
+        connector_calls = 0
+
+        def connector(*_args, **_kwargs):
+            nonlocal connector_calls
+            connector_calls += 1
+            if connector_calls > 1:
+                raise AssertionError('must not open a config-only retry after all audio was acknowledged')
+            return websocket
+
+        transcriber = _transcriber(reconnect_attempts=1, connector=connector, sleeper=lambda _: None)
+        output_queue = queue.SimpleQueue()
+
+        transcriber.loop(_audio_input_queue(), output_queue)
+
+        self.assertEqual(connector_calls, 1)
+        self.assertEqual(output_queue.get_nowait().transcript, 'complete.')
+        self.assertIsNone(output_queue.get_nowait())
 
     def test_failed_eof_send_reconnects_replays_audio_and_resends_eof(self):
         first = _EofFailureWebSocket()
@@ -559,7 +757,7 @@ class ModulateReconnectTest(unittest.TestCase):
 
                 transcriber = _transcriber(reconnect_attempts=2, connector=connector, sleeper=lambda _: None)
                 with self.assertRaises(ModulateStreamingError) as raised:
-                    transcriber.loop(queue.SimpleQueue(), queue.SimpleQueue())
+                    transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
 
                 self.assertEqual((attempts, raised.exception.retryable), (1, False))
 
@@ -580,8 +778,7 @@ class ModulateReconnectTest(unittest.TestCase):
                 transcriber = _transcriber(reconnect_attempts=1,
                                            connector=connector,
                                            sleeper=delays.append)
-                input_queue = queue.SimpleQueue()
-                input_queue.put(None)
+                input_queue = _audio_input_queue()
                 output_queue = queue.SimpleQueue()
 
                 transcriber.loop(input_queue, output_queue)
@@ -658,8 +855,7 @@ class ModulateReconnectTest(unittest.TestCase):
                 transcriber = _transcriber(reconnect_attempts=1,
                                            connector=connector,
                                            sleeper=delays.append)
-                input_queue = queue.SimpleQueue()
-                input_queue.put(None)
+                input_queue = _audio_input_queue()
                 output_queue = queue.SimpleQueue()
 
                 transcriber.loop(input_queue, output_queue)
@@ -706,7 +902,7 @@ class ModulateReconnectTest(unittest.TestCase):
 
                 transcriber = _transcriber(reconnect_attempts=2, connector=connector, sleeper=lambda _: None)
                 with self.assertRaises(ModulateStreamingError) as raised:
-                    transcriber.loop(queue.SimpleQueue(), queue.SimpleQueue())
+                    transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
 
                 self.assertEqual((attempts, raised.exception.retryable), (1, False))
 
@@ -720,7 +916,7 @@ class ModulateReconnectTest(unittest.TestCase):
 
         transcriber = _transcriber(reconnect_attempts=2, connector=connector, sleeper=lambda _: None)
         with self.assertRaises(ModulateStreamingError) as raised:
-            transcriber.loop(queue.SimpleQueue(), queue.SimpleQueue())
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
 
         self.assertEqual((attempts, raised.exception.retryable), (1, False))
 
@@ -741,8 +937,7 @@ class ModulateReconnectTest(unittest.TestCase):
                 transcriber = _transcriber(reconnect_attempts=1,
                                            connector=connector,
                                            sleeper=delays.append)
-                input_queue = queue.SimpleQueue()
-                input_queue.put(None)
+                input_queue = _audio_input_queue()
                 output_queue = queue.SimpleQueue()
 
                 transcriber.loop(input_queue, output_queue)
@@ -781,8 +976,7 @@ class ModulateReconnectTest(unittest.TestCase):
         transcriber = _transcriber(reconnect_attempts=1,
                                    connector=connector,
                                    sleeper=delays.append)
-        input_queue = queue.SimpleQueue()
-        input_queue.put(None)
+        input_queue = _audio_input_queue()
         output_queue = queue.SimpleQueue()
 
         transcriber.loop(input_queue, output_queue)
@@ -819,8 +1013,7 @@ class ModulateReconnectTest(unittest.TestCase):
         transcriber = _transcriber(reconnect_attempts=2,
                                    connector=connector,
                                    sleeper=delays.append)
-        input_queue = queue.SimpleQueue()
-        input_queue.put(None)
+        input_queue = _audio_input_queue()
 
         with self.assertRaises(ModulateStreamingError) as raised:
             transcriber.loop(input_queue, queue.SimpleQueue())
@@ -862,8 +1055,7 @@ class ModulateReconnectTest(unittest.TestCase):
         transcriber = _transcriber(reconnect_attempts=2,
                                    connector=connector,
                                    sleeper=delays.append)
-        input_queue = queue.SimpleQueue()
-        input_queue.put(None)
+        input_queue = _audio_input_queue()
 
         with self.assertRaises(ModulateStreamingError) as raised:
             transcriber.loop(input_queue, queue.SimpleQueue())
@@ -925,8 +1117,7 @@ class ModulateReconnectTest(unittest.TestCase):
                                    reconnect_backoff_seconds=0.5,
                                    connector=connector,
                                    sleeper=delays.append)
-        input_queue = queue.SimpleQueue()
-        input_queue.put(None)
+        input_queue = _audio_input_queue()
         output_queue = queue.SimpleQueue()
 
         transcriber.loop(input_queue, output_queue)
@@ -1002,7 +1193,7 @@ class ModulateReconnectTest(unittest.TestCase):
                                    connector=connector,
                                    sleeper=lambda _: None)
         with self.assertRaises(ModulateStreamingError) as raised:
-            transcriber.loop(queue.SimpleQueue(), queue.SimpleQueue())
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
         self.assertEqual(attempts, 3)
         self.assertNotIn(key, str(raised.exception))
 
@@ -1014,16 +1205,18 @@ class ModulateConfigTest(unittest.TestCase):
         enabled = tyro.cli(Config, args=[
             'input', '--use-modulate-transcription-api', '--modulate-api-key', 'mod-key',
             '--modulate-partial-cutoff-seconds', '7.5', '--modulate-reconnect-attempts', '5',
-            '--modulate-reconnect-backoff-seconds', '0.25',
+            '--modulate-reconnect-backoff-seconds', '0.25', '--modulate-websocket-compression',
         ])
 
         self.assertFalse(default.use_modulate_transcription_api)
         self.assertEqual(default.modulate_reconnect_attempts, 3)
+        self.assertFalse(default.modulate_websocket_compression)
         self.assertTrue(enabled.use_modulate_transcription_api)
         self.assertEqual(enabled.modulate_api_key, 'mod-key')
         self.assertEqual(enabled.modulate_partial_cutoff_seconds, 7.5)
         self.assertEqual(enabled.modulate_reconnect_attempts, 5)
         self.assertEqual(enabled.modulate_reconnect_backoff_seconds, 0.25)
+        self.assertTrue(enabled.modulate_websocket_compression)
 
     def test_validation_requires_key_and_valid_retry_values(self):
         invalid_configs = [
@@ -1051,7 +1244,8 @@ class ModulateConfigTest(unittest.TestCase):
     def test_run_bypasses_slicer_and_connects_getter_queue_directly(self):
         from stream_translator_gpt import main
 
-        config = Config(url='input', use_modulate_transcription_api=True, modulate_api_key='key')
+        config = Config(url='input', use_modulate_transcription_api=True, modulate_api_key='key',
+                        modulate_websocket_compression=True)
         fake_getter = mock.Mock()
         fake_transcriber = mock.Mock()
         fake_exporter = mock.Mock()
@@ -1067,17 +1261,23 @@ class ModulateConfigTest(unittest.TestCase):
                 mock.patch.object(main, '_create_audio_getter', return_value=fake_getter), \
                 mock.patch.object(main, 'ModulateStreamingTranscriber', return_value=fake_transcriber) as constructor, \
                 mock.patch.object(main, 'ResultExporter', return_value=fake_exporter), \
+                mock.patch.object(main.signal, 'signal') as register_signal, \
                 mock.patch.object(main, 'start_daemon_thread', side_effect=fake_start):
             main.run(config)
 
         client_pool.init.assert_called_once()
         constructor.assert_called_once()
+        self.assertTrue(constructor.call_args.kwargs['websocket_compression'])
         names = [kwargs.get('name') for _, kwargs in worker_calls]
         self.assertEqual(names, ['getter', 'transcriber', 'exporter'])
         getter_queue = worker_calls[0][1]['output_queue']
         transcriber_queue = worker_calls[1][1]['input_queue']
         self.assertIs(getter_queue, transcriber_queue)
         self.assertEqual(getter_queue.maxsize, 3750)
+        expected_signals = [mock.call(main.signal.SIGINT, fake_getter._exit_handler)]
+        if hasattr(main.signal, 'SIGTERM'):
+            expected_signals.append(mock.call(main.signal.SIGTERM, fake_getter._exit_handler))
+        register_signal.assert_has_calls(expected_signals)
 
 
 class AudioReplayStateTest(unittest.TestCase):

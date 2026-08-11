@@ -111,6 +111,40 @@ def _drain(audio_queue):
 
 class PyAudioCallbackTest(unittest.TestCase):
 
+    def test_stop_is_idempotent_and_leaves_portaudio_cleanup_to_owner(self):
+        getter, _, _ = _make_getter()
+        stream = mock.Mock()
+        pyaudio = mock.Mock()
+        getter.stream = stream
+        getter.pyaudio = pyaudio
+        getter.pyaudio_terminated = False
+        for value in range(getter.recording_queue.maxsize):
+            getter.recording_queue.put_nowait((bytes([value]), 0))
+
+        with mock.patch.object(getter, '_cleanup') as cleanup:
+            getter.stop()
+            getter.stop()
+
+        self.assertTrue(getter.stopping.is_set())
+        self.assertTrue(getter.cancel_requested.is_set())
+        self.assertEqual(_drain(getter.recording_queue), [None])
+        cleanup.assert_not_called()
+        stream.stop_stream.assert_not_called()
+        stream.close.assert_not_called()
+        pyaudio.terminate.assert_not_called()
+
+    def test_open_failure_propagates_after_owner_cleanup_and_one_sentinel(self):
+        getter, instance, _ = _make_getter()
+        instance.open = mock.Mock(side_effect=OSError('open failed'))
+        output_queue = queue.SimpleQueue()
+
+        with self.assertRaisesRegex(OSError, 'open failed'):
+            getter.loop(output_queue)
+
+        self.assertEqual(_drain(output_queue), [None])
+        self.assertEqual(instance.terminated, 1)
+        self.assertTrue(getter.finished.is_set())
+
     def test_windows_default_output_maps_to_matching_wasapi_loopback(self):
 
         class FakeWasapiPyAudio:

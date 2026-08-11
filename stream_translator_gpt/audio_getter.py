@@ -4,13 +4,16 @@ import os
 import platform
 import queue
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import wave
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import ffmpeg
@@ -22,6 +25,81 @@ from .logging_utils import redact_url
 
 
 logger = logging.getLogger('main')
+_stream_versions_lock = threading.Lock()
+_stream_versions_logged = False
+_STREAM_FORMAT_TEMPLATE = ('format_id=%(format_id)s protocol=%(protocol)s ext=%(ext)s acodec=%(acodec)s '
+                           'vcodec=%(vcodec)s live_status=%(live_status)s')
+
+
+def _signal_exit_code(signum: int) -> int:
+    """Keep interactive Ctrl+C compatible while preserving SIGTERM failure semantics."""
+    return 0 if signum == signal.SIGINT else 128 + int(signum)
+
+
+def _signal_cleanup_timeout(signum: int) -> float:
+    """Allow service-manager termination more cleanup time than interactive Ctrl+C."""
+    return 10.0 if hasattr(signal, 'SIGTERM') and signum == signal.SIGTERM else 2.0
+
+
+@dataclass
+class _StreamTransportStats:
+    """Small, content-free diagnostics shared with the transport thread."""
+
+    started_at: float
+    first_media_elapsed: float | None = None
+    media_bytes: int = 0
+    media_chunks: int = 0
+    ytdlp_return_code: int | None = None
+    transport_error: str | None = None
+    format_diagnostic_path: Path | None = None
+    format_diagnostic_logged: bool = False
+
+
+def _log_stream_tool_versions():
+    """Log local tool versions once without adding network activity."""
+    global _stream_versions_logged
+    if not logger.hasHandlers() or not logger.isEnabledFor(logging.DEBUG) or _stream_versions_logged:
+        return
+    with _stream_versions_lock:
+        if _stream_versions_logged:
+            return
+        _stream_versions_logged = True
+
+        try:
+            ytdlp_version = version('yt-dlp')
+        except Exception as exc:
+            # Broken package metadata must never prevent stream startup.
+            ytdlp_version = ('unknown' if isinstance(exc, PackageNotFoundError)
+                              else f'unavailable ({type(exc).__name__})')
+
+        try:
+            result = subprocess.run(['ffmpeg', '-version'],
+                                    capture_output=True,
+                                    text=True,
+                                    encoding='utf-8',
+                                    errors='replace',
+                                    timeout=5,
+                                    check=False)
+            ffmpeg_version = next((line.strip() for line in result.stdout.splitlines() if line.strip()), 'unknown')
+        except (OSError, subprocess.SubprocessError) as exc:
+            ffmpeg_version = f'unavailable ({type(exc).__name__})'
+        logger.debug('Stream tools: yt-dlp %s; %s', ytdlp_version, ffmpeg_version)
+
+
+def _log_stream_format_diagnostic(stats: _StreamTransportStats):
+    """Log yt-dlp's selected non-sensitive format fields at most once."""
+    if (not logger.isEnabledFor(logging.DEBUG) or stats.format_diagnostic_logged
+            or stats.format_diagnostic_path is None):
+        return
+    try:
+        lines = stats.format_diagnostic_path.read_text(encoding='utf-8', errors='replace').splitlines()
+    except (OSError, ValueError):
+        return
+    selected_format = next((line.strip() for line in reversed(lines) if line.strip()), '')
+    if not selected_format:
+        return
+    stats.format_diagnostic_logged = True
+    logger.debug('yt-dlp selected stream format: %s', selected_format[:500])
 
 
 class _RealtimeAudioPacer:
@@ -60,12 +138,66 @@ class _RealtimeAudioPacer:
         return True
 
 
+def _put_audio_block(output_queue, audio: np.ndarray, stop_event: threading.Event | None = None) -> bool:
+    """Put one audio block while allowing cancellation to break bounded-queue backpressure."""
+    if stop_event is None:
+        output_queue.put(audio)
+        return True
+    while not stop_event.is_set():
+        try:
+            output_queue.put(audio, timeout=0.1)
+            return True
+        except queue.Full:
+            continue
+    return False
+
+
+def _signal_end_of_stream(output_queue, *, discard_buffered: bool = False) -> None:
+    """Publish one terminal sentinel without blocking a cancelled bounded producer."""
+    if discard_buffered:
+        # Once downstream has failed or cancellation was requested, queued audio
+        # is no longer useful. Make room for EOF so shutdown cannot deadlock on
+        # the bounded Modulate input queue.
+        while True:
+            try:
+                output_queue.get_nowait()
+            except queue.Empty:
+                break
+        output_queue.put_nowait(None)
+        return
+    output_queue.put(None)
+
+
+def _wake_recording_queue(recording_queue, *, discard_buffered: bool) -> None:
+    """Wake a callback consumer without blocking the callback or cancellation caller."""
+    if discard_buffered:
+        while True:
+            try:
+                recording_queue.get_nowait()
+            except queue.Empty:
+                break
+    while True:
+        try:
+            recording_queue.put_nowait(None)
+            return
+        except queue.Full:
+            # A natural callback EOF preserves all queued audio when capacity
+            # permits. If the bounded queue is full, match the legacy behavior
+            # and sacrifice only the oldest block to guarantee room for EOF.
+            try:
+                recording_queue.get_nowait()
+            except queue.Empty:
+                continue
+
+
 def _read_ffmpeg_loop(ffmpeg_process,
                       byte_size: int,
                       output_queue,
                       source_name: str = 'ffmpeg',
                       pacer: _RealtimeAudioPacer | None = None,
-                      pad_final_block: bool = False):
+                      pad_final_block: bool = False,
+                      started_at: float | None = None,
+                      stop_event: threading.Event | None = None):
     complete_blocks = 0
     while True:
         chunks = []
@@ -96,10 +228,26 @@ def _read_ffmpeg_loop(ffmpeg_process,
             audio = np.pad(audio, (0, expected_samples - len(audio)))
             logger.debug('%s padded its final audio block from %d to %d sample(s)', source_name, valid_sample_count,
                          expected_samples)
+        if complete_blocks == 0 and logger.isEnabledFor(logging.DEBUG):
+            finite_audio = audio[np.isfinite(audio)]
+            elapsed = time.monotonic() - started_at if started_at is not None else None
+            if finite_audio.size:
+                minimum = float(np.min(finite_audio))
+                maximum = float(np.max(finite_audio))
+                rms = float(np.sqrt(np.mean(np.square(finite_audio, dtype=np.float64))))
+                logger.debug('%s produced its first PCM block%s; samples=%d, finite=%d, min=%.6f, max=%.6f, '
+                             'rms=%.6f', source_name, f' after {elapsed:.3f}s' if elapsed is not None else '',
+                             audio.size, finite_audio.size, minimum, maximum, rms)
+            else:
+                logger.debug('%s produced its first PCM block%s; samples=%d, finite=0', source_name,
+                             f' after {elapsed:.3f}s' if elapsed is not None else '', audio.size)
         if pacer is not None and not pacer.wait_for_block(valid_sample_count):
             logger.debug('%s realtime playback stopped after %d emitted block(s)', source_name, complete_blocks)
             break
-        output_queue.put(audio)
+        if not _put_audio_block(output_queue, audio, stop_event):
+            logger.debug('%s audio output stopped while waiting for downstream capacity after %d emitted block(s)',
+                         source_name, complete_blocks)
+            break
         complete_blocks += 1
         if reached_eof:
             logger.debug('%s audio output reached EOF after %d emitted block(s)', source_name, complete_blocks)
@@ -107,12 +255,33 @@ def _read_ffmpeg_loop(ffmpeg_process,
     return complete_blocks
 
 
-def _wait_for_process(process, process_name: str, timeout: float = 5.0):
+def _kill_process(process, process_name: str, process_tree: bool = False):
+    """Kill a child, including its private POSIX process group when requested."""
+    process_id = getattr(process, 'pid', None)
+    if (process_tree and os.name != 'nt' and isinstance(process_id, int)
+            and not isinstance(process_id, bool)):
+        try:
+            # _open_stream starts yt-dlp as the leader of a private session,
+            # therefore its PID is also the process-group ID. Using the PID
+            # directly avoids ever resolving and signalling a shared host
+            # process group if a foreign Popen is passed accidentally.
+            os.killpg(process_id, signal.SIGKILL)
+            return
+        except OSError:
+            logger.debug('Could not kill the %s process group; falling back to its parent process',
+                         process_name, exc_info=True)
+    process.kill()
+
+
+def _wait_for_process(process,
+                      process_name: str,
+                      timeout: float = 5.0,
+                      process_tree: bool = False):
     try:
         return_code = process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         logger.error('%s did not exit within %.1fs; killing it', process_name, timeout)
-        process.kill()
+        _kill_process(process, process_name, process_tree=process_tree)
         return_code = process.wait()
 
     if return_code == 0:
@@ -122,7 +291,45 @@ def _wait_for_process(process, process_name: str, timeout: float = 5.0):
     return return_code
 
 
-def _transport(ytdlp_proc, ffmpeg_proc):
+def _cleanup_stream_children(ffmpeg_process, ytdlp_process, transport_thread=None):
+    """Kill and reap both sides of a failed stream pipeline."""
+    for process_name, process in (('ffmpeg', ffmpeg_process), ('yt-dlp', ytdlp_process)):
+        if process is None:
+            continue
+        try:
+            # The yt-dlp leader may already have exited while its internal HLS
+            # ffmpeg still owns the stdout pipe, so always signal its private
+            # POSIX group during failure cleanup.
+            if (process_name == 'yt-dlp' and os.name != 'nt') or process.poll() is None:
+                _kill_process(process, process_name, process_tree=process_name == 'yt-dlp')
+                logger.debug('Killed %s during stream failure cleanup', process_name)
+        except OSError:
+            logger.debug('%s exited before stream failure cleanup could kill it', process_name, exc_info=True)
+
+    if transport_thread is not None and transport_thread.is_alive():
+        transport_thread.join(timeout=5)
+
+    for process_name, process in (('ffmpeg', ffmpeg_process), ('yt-dlp', ytdlp_process)):
+        if process is None:
+            continue
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.error('%s did not exit during stream failure cleanup; killing it again', process_name)
+            try:
+                _kill_process(process, process_name, process_tree=process_name == 'yt-dlp')
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                logger.exception('Could not reap %s during stream failure cleanup', process_name)
+        except OSError:
+            logger.debug('%s was already reaped during stream failure cleanup', process_name, exc_info=True)
+
+    if transport_thread is not None and transport_thread.is_alive():
+        logger.error('Stream transport thread remained alive after child-process cleanup')
+
+
+def _transport(ytdlp_proc, ffmpeg_proc, stats: _StreamTransportStats | None = None):
+    stats = stats or _StreamTransportStats(started_at=time.monotonic())
     ffmpeg_closed_early = False
     try:
         while True:
@@ -130,14 +337,23 @@ def _transport(ytdlp_proc, ffmpeg_proc):
             if not chunk:
                 logger.debug('yt-dlp output reached EOF')
                 break
+            stats.media_bytes += len(chunk)
+            stats.media_chunks += 1
+            if stats.first_media_elapsed is None:
+                stats.first_media_elapsed = time.monotonic() - stats.started_at
+                logger.debug('yt-dlp produced its first media bytes after %.3fs', stats.first_media_elapsed)
+                _log_stream_format_diagnostic(stats)
             try:
                 ffmpeg_proc.stdin.write(chunk)
+                ffmpeg_proc.stdin.flush()
             except (BrokenPipeError, OSError):
                 ffmpeg_closed_early = True
+                stats.transport_error = 'ffmpeg input pipe closed before yt-dlp finished'
                 logger.error('ffmpeg closed its input pipe before yt-dlp finished')
                 break
-    except Exception:
+    except Exception as exc:
         ffmpeg_closed_early = True
+        stats.transport_error = f'unexpected {type(exc).__name__}'
         logger.exception('Unexpected failure while transporting yt-dlp audio to ffmpeg')
     finally:
         try:
@@ -146,8 +362,19 @@ def _transport(ytdlp_proc, ffmpeg_proc):
             logger.debug('ffmpeg input pipe was already closed')
 
         if ffmpeg_closed_early and ytdlp_proc.poll() is None:
-            ytdlp_proc.terminate()
-        _wait_for_process(ytdlp_proc, 'yt-dlp')
+            _kill_process(ytdlp_proc, 'yt-dlp', process_tree=True)
+        stats.ytdlp_return_code = _wait_for_process(ytdlp_proc, 'yt-dlp', process_tree=True)
+        close_stdout = getattr(ytdlp_proc.stdout, 'close', None)
+        if callable(close_stdout):
+            try:
+                close_stdout()
+            except OSError:
+                logger.debug('yt-dlp stdout was already closed', exc_info=True)
+        _log_stream_format_diagnostic(stats)
+        logger.debug('yt-dlp media transport finished after %.3fs; bytes=%d, chunks=%d, return_code=%s',
+                     time.monotonic() - stats.started_at, stats.media_bytes, stats.media_chunks,
+                     stats.ytdlp_return_code)
+    return stats
 
 
 def _open_stream(url: str,
@@ -156,10 +383,23 @@ def _open_stream(url: str,
                  proxy: str,
                  cwd: str,
                  wait_for_video: int | None = None,
-                 live_from_start: bool = False):
+                 live_from_start: bool = False,
+                 stream_format_diagnostic_file: str | None = None):
+    _log_stream_tool_versions()
     # stdout is reserved exclusively for media bytes. Quiet mode suppresses
     # progress/status text, while warnings and errors remain on inherited stderr.
     cmd = [sys.executable, '-m', 'yt_dlp', url, '-f', format, '-o', '-', '--quiet']
+    format_diagnostic_path = None
+    if stream_format_diagnostic_file and stream_format_diagnostic_file.strip():
+        # yt-dlp runs in a private temporary working directory. Resolve the
+        # user-facing path here so a relative path remains relative to the
+        # caller and the diagnostic survives temporary-directory cleanup.
+        format_diagnostic_path = Path(stream_format_diagnostic_file).expanduser().resolve()
+        # yt-dlp's --print-to-file appends. Treat the explicitly supplied path
+        # as one diagnostic artifact per stream instead of accumulating stale
+        # records across repeated runs.
+        format_diagnostic_path.write_text('', encoding='utf-8')
+        cmd.extend(['--print-to-file', f'before_dl:{_STREAM_FORMAT_TEMPLATE}', str(format_diagnostic_path)])
     if wait_for_video is not None:
         cmd.extend(['--wait-for-video', str(wait_for_video)])
     if live_from_start:
@@ -168,10 +408,21 @@ def _open_stream(url: str,
         cmd.extend(['--cookies', cookies])
     if proxy:
         cmd.extend(['--proxy', proxy])
-    ytdlp_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=None, cwd=cwd)
+    started_at = time.monotonic()
+    stats = _StreamTransportStats(started_at=started_at, format_diagnostic_path=format_diagnostic_path)
+    # Live HLS extractors can spawn an internal ffmpeg downloader. On POSIX,
+    # place yt-dlp and its descendants in a private session so notebook
+    # shutdown can terminate the complete process tree deterministically.
+    ytdlp_process = subprocess.Popen(cmd,
+                                     stdout=subprocess.PIPE,
+                                     stderr=None,
+                                     cwd=cwd,
+                                     start_new_session=os.name != 'nt')
 
     try:
-        ffmpeg_process = (ffmpeg.input('pipe:', loglevel='panic').output('pipe:',
+        # Keep stderr inherited: media remains isolated on stdout, while ffmpeg
+        # errors stay visible without creating a pipe that nobody drains.
+        ffmpeg_process = (ffmpeg.input('pipe:0', loglevel='error').output('pipe:1',
                                                                          format='f32le',
                                                                          acodec='pcm_f32le',
                                                                          ac=1,
@@ -180,22 +431,26 @@ def _open_stream(url: str,
     except Exception as exc:
         if ytdlp_process.poll() is None:
             try:
-                ytdlp_process.terminate()
+                _kill_process(ytdlp_process, 'yt-dlp', process_tree=True)
             except OSError:
                 logger.debug('yt-dlp exited before it could be terminated after ffmpeg startup failure', exc_info=True)
-        _wait_for_process(ytdlp_process, 'yt-dlp')
+        _wait_for_process(ytdlp_process, 'yt-dlp', process_tree=True)
         if isinstance(exc, ffmpeg.Error):
             stderr = exc.stderr.decode(errors='replace') if exc.stderr else str(exc)
             raise RuntimeError(f'Failed to load audio: {stderr}') from exc
         raise
 
     logger.debug('Started yt-dlp process %d and ffmpeg process %d', ytdlp_process.pid, ffmpeg_process.pid)
-    thread = threading.Thread(target=_transport,
-                              name='stream-transport',
-                              args=(ytdlp_process, ffmpeg_process),
-                              daemon=True)
-    thread.start()
-    return ffmpeg_process, ytdlp_process, thread
+    try:
+        thread = threading.Thread(target=_transport,
+                                  name='stream-transport',
+                                  args=(ytdlp_process, ffmpeg_process, stats),
+                                  daemon=True)
+        thread.start()
+    except Exception:
+        _cleanup_stream_children(ffmpeg_process, ytdlp_process)
+        raise
+    return ffmpeg_process, ytdlp_process, thread, stats
 
 
 class StreamAudioGetter(LoopWorkerBase):
@@ -207,7 +462,8 @@ class StreamAudioGetter(LoopWorkerBase):
                  proxy: str,
                  realtime: bool = False,
                  wait_for_video: int | None = None,
-                 live_from_start: bool = False) -> None:
+                 live_from_start: bool = False,
+                 stream_format_diagnostic_file: str | None = None) -> None:
         self.url = url
         self.format = format
         self.cookies = cookies
@@ -215,11 +471,17 @@ class StreamAudioGetter(LoopWorkerBase):
         self.realtime = realtime
         self.wait_for_video = wait_for_video
         self.live_from_start = live_from_start
+        self.stream_format_diagnostic_file = stream_format_diagnostic_file
         self.temp_dir = tempfile.mkdtemp()
         self.ffmpeg_process = None
         self.ytdlp_process = None
         self.transport_thread = None
         self.stop_event = threading.Event()
+        self.started = threading.Event()
+        self.finished = threading.Event()
+        self._stop_lock = threading.Lock()
+        self._stopped_ffmpeg_process = None
+        self._stopped_ytdlp_process = None
         self.pacer = None
         self.byte_size = round(SAMPLES_PER_FRAME * 4)  # Factor 4 comes from float32 (4 bytes per sample)
 
@@ -227,49 +489,107 @@ class StreamAudioGetter(LoopWorkerBase):
         if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    def stop(self) -> None:
+        """Request shutdown and interrupt any blocking child-process reads."""
+        processes_to_stop = []
+        with self._stop_lock:
+            self.stop_event.set()
+            for process_name, process, stopped_attr in (
+                    ('ffmpeg', self.ffmpeg_process, '_stopped_ffmpeg_process'),
+                    ('yt-dlp', self.ytdlp_process, '_stopped_ytdlp_process')):
+                if process is None or process is getattr(self, stopped_attr):
+                    continue
+                setattr(self, stopped_attr, process)
+                processes_to_stop.append((process_name, process))
+        for process_name, process in processes_to_stop:
+            try:
+                _kill_process(process, process_name, process_tree=process_name == 'yt-dlp')
+            except OSError:
+                logger.debug('%s exited before the stream getter stop request', process_name, exc_info=True)
+
     def _exit_handler(self, signum, frame):
         logger.info('Stopping stream audio getter after signal %s', signum)
-        self.stop_event.set()
-        if self.ffmpeg_process:
-            self.ffmpeg_process.kill()
-        if self.ytdlp_process:
-            self.ytdlp_process.kill()
-        if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir, ignore_errors=True)
-        sys.exit(0)
+        self.stop()
+        timeout = _signal_cleanup_timeout(signum)
+        if self.started.is_set() and not self.finished.wait(timeout=timeout):
+            logger.warning('Timed out waiting for stream audio getter to stop cleanly')
+        sys.exit(_signal_exit_code(signum))
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
+        self.started.set()
         logger.warning('Opening stream: %s', redact_url(self.url))
         if self.wait_for_video is not None:
             logger.warning('Waiting for scheduled stream availability; yt-dlp minimum retry interval is %d second(s)',
                            self.wait_for_video)
-        self.ffmpeg_process, self.ytdlp_process, self.transport_thread = _open_stream(
-            self.url,
-            self.format,
-            self.cookies,
-            self.proxy,
-            self.temp_dir,
-            wait_for_video=self.wait_for_video,
-            live_from_start=self.live_from_start)
-        if self.realtime:
-            self.pacer = _RealtimeAudioPacer(self.stop_event, source_description='stream playback')
-        _read_ffmpeg_loop(self.ffmpeg_process,
-                          self.byte_size,
-                          output_queue,
-                          source_name='stream ffmpeg',
-                          pacer=self.pacer)
-        _wait_for_process(self.ffmpeg_process, 'ffmpeg')
-        self.transport_thread.join(timeout=5)
-        if self.transport_thread.is_alive():
-            logger.error('Stream transport thread did not exit within 5.0s; killing yt-dlp')
-            if self.ytdlp_process.poll() is None:
-                self.ytdlp_process.kill()
-            self.transport_thread.join(timeout=1)
-        logger.info('Stream audio input finished')
+        completed = False
+        try:
+            self.ffmpeg_process, self.ytdlp_process, self.transport_thread, transport_stats = _open_stream(
+                self.url,
+                self.format,
+                self.cookies,
+                self.proxy,
+                self.temp_dir,
+                wait_for_video=self.wait_for_video,
+                live_from_start=self.live_from_start,
+                stream_format_diagnostic_file=self.stream_format_diagnostic_file)
+            if self.stop_event.is_set():
+                logger.debug('Stream audio getter was stopped while opening its child processes')
+                return
+            if self.realtime:
+                self.pacer = _RealtimeAudioPacer(self.stop_event, source_description='stream playback')
+            pcm_blocks = _read_ffmpeg_loop(self.ffmpeg_process,
+                                           self.byte_size,
+                                           output_queue,
+                                           source_name='stream ffmpeg',
+                                           pacer=self.pacer,
+                                           started_at=transport_stats.started_at,
+                                           stop_event=self.stop_event)
+            if self.stop_event.is_set():
+                logger.debug('Stream audio getter stopped after %d PCM block(s)', pcm_blocks)
+                return
+            ffmpeg_return_code = _wait_for_process(self.ffmpeg_process, 'ffmpeg')
+            self.transport_thread.join(timeout=5)
+            transport_stuck = self.transport_thread.is_alive()
+            if transport_stuck:
+                logger.error('Stream transport thread did not exit within 5.0s; killing yt-dlp')
+                _kill_process(self.ytdlp_process, 'yt-dlp', process_tree=True)
+                self.transport_thread.join(timeout=1)
+                transport_stuck = self.transport_thread.is_alive()
 
-        if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir, ignore_errors=True)
-        output_queue.put(None)
+            ytdlp_return_code = transport_stats.ytdlp_return_code
+            logger.debug('Stream process summary: PCM blocks=%d, media bytes=%d, yt-dlp return_code=%s, '
+                         'ffmpeg return_code=%s, transport_error=%s', pcm_blocks, transport_stats.media_bytes,
+                         ytdlp_return_code, ffmpeg_return_code, transport_stats.transport_error)
+            failures = []
+            if transport_stuck:
+                failures.append('transport thread did not stop')
+            if transport_stats.transport_error:
+                failures.append(f'transport failed ({transport_stats.transport_error})')
+            if ytdlp_return_code is None:
+                failures.append('yt-dlp exit status was unavailable')
+            elif ytdlp_return_code != 0:
+                failures.append(f'yt-dlp exited with status {ytdlp_return_code}')
+            if ffmpeg_return_code != 0:
+                failures.append(f'ffmpeg exited with status {ffmpeg_return_code}')
+            if pcm_blocks == 0:
+                failures.append('no decoded PCM audio was produced')
+            if failures:
+                raise RuntimeError('Stream audio pipeline failed: ' + '; '.join(failures))
+
+            logger.info('Stream audio input finished')
+            completed = True
+        finally:
+            try:
+                _signal_end_of_stream(output_queue,
+                                      discard_buffered=self.stop_event.is_set() or not completed)
+            finally:
+                try:
+                    if not completed:
+                        _cleanup_stream_children(self.ffmpeg_process, self.ytdlp_process, self.transport_thread)
+                    if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
+                        shutil.rmtree(self.temp_dir, ignore_errors=True)
+                finally:
+                    self.finished.set()
 
 
 class LocalFileAudioGetter(LoopWorkerBase):
@@ -279,24 +599,42 @@ class LocalFileAudioGetter(LoopWorkerBase):
         self.realtime = realtime
         self.ffmpeg_process = None
         self.stop_event = threading.Event()
+        self.started = threading.Event()
+        self.finished = threading.Event()
+        self._stop_lock = threading.Lock()
+        self._stopped_ffmpeg_process = None
         self.pacer = None
         self.byte_size = round(SAMPLES_PER_FRAME * 4)  # Factor 4 comes from float32 (4 bytes per sample)
 
+    def stop(self) -> None:
+        """Request cancellation and interrupt the decoder without waiting from a foreign thread."""
+        process = None
+        with self._stop_lock:
+            self.stop_event.set()
+            if (self.ffmpeg_process is not None
+                    and self.ffmpeg_process is not self._stopped_ffmpeg_process):
+                process = self.ffmpeg_process
+                self._stopped_ffmpeg_process = process
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.kill()
+            except OSError:
+                logger.debug('Local file ffmpeg exited before the stop request', exc_info=True)
+
     def _exit_handler(self, signum, frame):
         logger.info('Stopping local file audio getter after signal %s', signum)
-        self.stop_event.set()
-        if self.ffmpeg_process:
-            if self.ffmpeg_process.poll() is None:
-                self.ffmpeg_process.kill()
-            try:
-                self.ffmpeg_process.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                logger.error('Local file ffmpeg did not exit within 1.0s after signal %s', signum)
-        sys.exit(0)
+        self.stop()
+        timeout = _signal_cleanup_timeout(signum)
+        if self.started.is_set() and not self.finished.wait(timeout=timeout):
+            logger.warning('Timed out waiting for local file audio getter to stop cleanly')
+        sys.exit(_signal_exit_code(signum))
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
+        self.started.set()
         mode = 'realtime' if self.realtime else 'offline'
         logger.warning('Opening local file in %s mode: %s', mode, self.file_path)
+        failed = False
         try:
             try:
                 self.ffmpeg_process = (ffmpeg.input(self.file_path,
@@ -305,12 +643,14 @@ class LocalFileAudioGetter(LoopWorkerBase):
                                                                              acodec='pcm_f32le',
                                                                              ac=1,
                                                                              ar=SAMPLE_RATE).run_async(
-                                                                                 pipe_stdin=True,
-                                                                                 pipe_stdout=True))
+                                                                                  pipe_stdin=True,
+                                                                                  pipe_stdout=True))
             except ffmpeg.Error as e:
                 stderr = e.stderr.decode(errors='replace') if e.stderr else str(e)
                 raise RuntimeError(f'Failed to load audio: {stderr}') from e
 
+            if self.stop_event.is_set():
+                self.stop()
             if self.realtime:
                 self.pacer = _RealtimeAudioPacer(self.stop_event)
             _read_ffmpeg_loop(self.ffmpeg_process,
@@ -318,14 +658,16 @@ class LocalFileAudioGetter(LoopWorkerBase):
                               output_queue,
                               source_name='local file ffmpeg',
                               pacer=self.pacer,
-                              pad_final_block=self.realtime)
-            if self.stop_event.is_set() and self.ffmpeg_process.poll() is None:
-                self.ffmpeg_process.kill()
+                              pad_final_block=self.realtime,
+                              stop_event=self.stop_event)
+            if self.stop_event.is_set():
+                self.stop()
             return_code = _wait_for_process(self.ffmpeg_process, 'local file ffmpeg')
             if not self.stop_event.is_set() and return_code != 0:
                 raise RuntimeError(f'Local file ffmpeg exited with status {return_code}')
             logger.info('Local file audio input finished')
         except Exception:
+            failed = True
             if self.ffmpeg_process is not None:
                 if self.ffmpeg_process.poll() is None:
                     self.ffmpeg_process.kill()
@@ -334,8 +676,11 @@ class LocalFileAudioGetter(LoopWorkerBase):
                     except subprocess.TimeoutExpired:
                         logger.error('Local file ffmpeg did not exit within 5.0s during failure cleanup')
             raise
-
-        output_queue.put(None)
+        finally:
+            try:
+                _signal_end_of_stream(output_queue, discard_buffered=self.stop_event.is_set() or failed)
+            finally:
+                self.finished.set()
 
 
 def _device_gain(volume_factor: float) -> float:
@@ -412,27 +757,41 @@ class SoundDeviceAudioGetter(LoopWorkerBase):
         self.dropped_blocks = 0
         self.stream = None
         self.stopping = threading.Event()
+        self.cancel_requested = threading.Event()
+        self.started = threading.Event()
+        self.finished = threading.Event()
+        self._stop_lock = threading.Lock()
+        self._aborted_stream = None
         self.debug_dumper = (_DebugAudioDumper(debug_audio_dir, debug_clip_duration, debug_max_clips)
                              if debug_audio_dir else None)
 
-    def _exit_handler(self, signum, frame):
-        logger.info('Stopping sounddevice audio getter after signal %s', signum)
-        self.stopping.set()
-        while True:
+    def stop(self) -> None:
+        """Request capture shutdown and wake the owner thread exactly once."""
+        queue_stop = False
+        stream_to_abort = None
+        with self._stop_lock:
+            self.cancel_requested.set()
+            if not self.stopping.is_set():
+                self.stopping.set()
+                queue_stop = True
+            if self.stream is not None and self.stream is not self._aborted_stream:
+                stream_to_abort = self.stream
+                self._aborted_stream = self.stream
+        if queue_stop:
+            _wake_recording_queue(self.recording_queue, discard_buffered=True)
+        if stream_to_abort is not None:
             try:
-                self.recording_queue.put_nowait(None)
-                break
-            except queue.Full:
-                try:
-                    self.recording_queue.get_nowait()
-                except queue.Empty:
-                    pass
-        if self.stream is not None:
-            try:
-                self.stream.abort()
+                stream_to_abort.abort()
             except Exception:
                 logger.debug('Unable to abort sounddevice stream cleanly', exc_info=True)
-        sys.exit(0)
+
+    def _exit_handler(self, signum, frame):
+        logger.info('Stopping sounddevice audio getter after signal %s', signum)
+        self.stop()
+        timeout = _signal_cleanup_timeout(signum)
+        if self.started.is_set() and not self.finished.wait(timeout=timeout):
+            logger.warning('Timed out waiting for sounddevice audio getter to stop cleanly')
+        sys.exit(_signal_exit_code(signum))
 
     def _recording_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         if status:
@@ -460,12 +819,16 @@ class SoundDeviceAudioGetter(LoopWorkerBase):
         return _prepare_device_audio(audio, self.native_rate, self.channels, self.gain)
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
+        self.started.set()
         logger.warning('Recording sounddevice input: %s (index %s)', self.device_name, self.device_index)
         logger.warning('Recording multiplier: %.6f (volume factor %.3f)', self.gain, self.volume_factor)
         read_size = max(1, round(self.native_rate * self.interval))
         buffer = np.array([], dtype=np.float32)
+        failed = False
 
         try:
+            if self.stopping.is_set():
+                return
             with self.sounddevice.InputStream(blocksize=read_size,
                                               samplerate=self.native_rate,
                                               channels=self.channels,
@@ -482,16 +845,26 @@ class SoundDeviceAudioGetter(LoopWorkerBase):
                         self.debug_dumper.add(audio)
                     buffer = np.concatenate((buffer, audio))
                     while len(buffer) >= SAMPLES_PER_FRAME:
-                        output_queue.put(buffer[:SAMPLES_PER_FRAME])
+                        if not _put_audio_block(output_queue, buffer[:SAMPLES_PER_FRAME], self.cancel_requested):
+                            break
                         buffer = buffer[SAMPLES_PER_FRAME:]
+                    if self.cancel_requested.is_set():
+                        break
         except Exception:
-            logger.exception('Sounddevice audio recording error')
+            failed = True
+            raise
         finally:
             self.stopping.set()
             self.stream = None
-            if self.debug_dumper is not None:
-                self.debug_dumper.close()
-            output_queue.put(None)
+            try:
+                _signal_end_of_stream(output_queue,
+                                      discard_buffered=self.cancel_requested.is_set() or failed)
+            finally:
+                try:
+                    if self.debug_dumper is not None:
+                        self.debug_dumper.close()
+                finally:
+                    self.finished.set()
 
 
 class _DebugAudioDumper:
@@ -624,8 +997,11 @@ class DeviceAudioGetter(LoopWorkerBase):
         self.logged_dropped_blocks = 0
         self.callback_error = None
         self.stopping = threading.Event()
+        self.cancel_requested = threading.Event()
         self.signal_received = threading.Event()
+        self.started = threading.Event()
         self.finished = threading.Event()
+        self._stop_lock = threading.Lock()
         self.cleanup_lock = threading.Lock()
         self.pyaudio_terminated = True
         self.debug_dumper = (_DebugAudioDumper(debug_audio_dir, debug_clip_duration, debug_max_clips)
@@ -711,17 +1087,20 @@ class DeviceAudioGetter(LoopWorkerBase):
 
         return self.pyaudio.get_device_info_by_index(self.device_index)
 
-    def _queue_stop(self) -> None:
-        self.stopping.set()
-        while True:
-            try:
-                self.recording_queue.put_nowait(None)
-                return
-            except queue.Full:
-                try:
-                    self.recording_queue.get_nowait()
-                except queue.Empty:
-                    pass
+    def _queue_stop(self, *, cancelled: bool = False) -> None:
+        queue_stop = False
+        with self._stop_lock:
+            if cancelled:
+                self.cancel_requested.set()
+            if not self.stopping.is_set():
+                self.stopping.set()
+                queue_stop = True
+        if queue_stop:
+            _wake_recording_queue(self.recording_queue, discard_buffered=cancelled)
+
+    def stop(self) -> None:
+        """Wake the capture owner thread; PortAudio resources remain owner-thread managed."""
+        self._queue_stop(cancelled=True)
 
     def _recording_callback(self, in_data, frame_count, time_info, status_flags):
         if self.stopping.is_set():
@@ -786,15 +1165,18 @@ class DeviceAudioGetter(LoopWorkerBase):
     def _exit_handler(self, signum, frame):
         logger.info('Stopping PyAudio device getter after signal %s', signum)
         if self.signal_received.is_set():
-            raise SystemExit(0)
+            raise SystemExit(_signal_exit_code(signum))
         self.signal_received.set()
-        self._queue_stop()
-        if not self.finished.wait(timeout=2.0):
+        self.stop()
+        timeout = _signal_cleanup_timeout(signum)
+        if self.started.is_set() and not self.finished.wait(timeout=timeout):
             logger.warning('Timed out waiting for PyAudio device getter to stop cleanly')
-        sys.exit(0)
+        sys.exit(_signal_exit_code(signum))
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
+        self.started.set()
         buffer = np.array([], dtype=np.float32)
+        failed = False
 
         try:
             with self.cleanup_lock:
@@ -853,15 +1235,24 @@ class DeviceAudioGetter(LoopWorkerBase):
                     self.debug_dumper.add(audio)
                 buffer = np.concatenate((buffer, audio))
                 while len(buffer) >= SAMPLES_PER_FRAME:
-                    output_queue.put(buffer[:SAMPLES_PER_FRAME])
+                    if not _put_audio_block(output_queue, buffer[:SAMPLES_PER_FRAME], self.cancel_requested):
+                        break
                     buffer = buffer[SAMPLES_PER_FRAME:]
+                if self.cancel_requested.is_set():
+                    break
         except Exception:
-            logger.exception('PyAudio recording error')
+            failed = True
+            raise
         finally:
             logger.debug('Closing PyAudio device')
             self.stopping.set()
-            self._cleanup()
-            if self.debug_dumper is not None:
-                self.debug_dumper.close()
-            output_queue.put(None)
-            self.finished.set()
+            try:
+                _signal_end_of_stream(output_queue,
+                                      discard_buffered=self.cancel_requested.is_set() or failed)
+            finally:
+                try:
+                    self._cleanup()
+                    if self.debug_dumper is not None:
+                        self.debug_dumper.close()
+                finally:
+                    self.finished.set()

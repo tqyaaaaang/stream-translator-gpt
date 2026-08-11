@@ -1,4 +1,5 @@
 import queue
+import threading
 import unittest
 from unittest import mock
 
@@ -252,6 +253,7 @@ class LocalFileProcessLifecycleTest(unittest.TestCase):
 
         process.kill.assert_called_once_with()
         process.wait.assert_called_once_with(timeout=5.0)
+        self.assertIsNone(output_queue.get_nowait())
         self.assertTrue(output_queue.empty())
 
     def test_nonzero_ffmpeg_exit_is_reported_after_reaping(self):
@@ -266,6 +268,48 @@ class LocalFileProcessLifecycleTest(unittest.TestCase):
 
         process.wait.assert_called_once_with(timeout=5.0)
         process.kill.assert_not_called()
+        self.assertIsNone(output_queue.get_nowait())
+        self.assertTrue(output_queue.empty())
+
+    def test_stop_is_idempotent_and_unblocks_a_full_modulate_queue(self):
+        block = np.ones(SAMPLES_PER_FRAME, dtype=np.float32)
+        process = mock.Mock(stdout=_SequenceReader([block.tobytes(), b'']))
+        process.poll.side_effect = lambda: -9 if process.kill.called else None
+        process.wait.return_value = -9
+        getter = LocalFileAudioGetter('clip.mp3')
+
+        class ObservedQueue(queue.Queue):
+            def __init__(self):
+                super().__init__(maxsize=1)
+                self.audio_put_attempted = threading.Event()
+
+            def put(self, item, *args, **kwargs):
+                if isinstance(item, np.ndarray):
+                    self.audio_put_attempted.set()
+                return super().put(item, *args, **kwargs)
+
+        output_queue = ObservedQueue()
+        output_queue.put('occupied')
+        errors = []
+
+        def run_getter():
+            try:
+                getter.loop(output_queue)
+            except Exception as exc:  # pragma: no cover - assertion below reports it
+                errors.append(exc)
+
+        with self._patch_ffmpeg(process):
+            worker = threading.Thread(target=run_getter)
+            worker.start()
+            self.assertTrue(output_queue.audio_put_attempted.wait(timeout=1))
+            getter.stop()
+            getter.stop()
+            worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        process.kill.assert_called_once_with()
+        self.assertIsNone(output_queue.get_nowait())
         self.assertTrue(output_queue.empty())
 
 

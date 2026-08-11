@@ -1,6 +1,7 @@
 import os
 import signal
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -88,11 +89,32 @@ class LiveFromStartCliTest(unittest.TestCase):
                 self._parse('https://example.test/live', *option)
 
 
+class StreamFormatDiagnosticCliTest(unittest.TestCase):
+
+    @staticmethod
+    def _parse(*args):
+        return tyro.cli(Config, args=_preprocess_deprecated_flags(args))
+
+    def test_option_is_disabled_by_default_and_accepts_a_file(self):
+        disabled = self._parse('https://example.test/live')
+        enabled = self._parse(
+            'https://example.test/live',
+            '--stream-format-diagnostic-file',
+            'selected-format.txt',
+        )
+
+        self.assertIsNone(disabled.stream_format_diagnostic_file)
+        self.assertEqual(enabled.stream_format_diagnostic_file, 'selected-format.txt')
+
+
 class WaitForVideoWiringTest(unittest.TestCase):
 
     def test_stream_getter_receives_wait_and_live_start_options(self):
         sentinel = object()
-        config = Config(url='https://example.test/live', wait_for_video=30, live_from_start=True)
+        config = Config(url='https://example.test/live',
+                        wait_for_video=30,
+                        live_from_start=True,
+                        stream_format_diagnostic_file='selected-format.txt')
 
         with mock.patch('stream_translator_gpt.main.StreamAudioGetter', return_value=sentinel) as getter_cls:
             result = _create_audio_getter(config)
@@ -106,10 +128,11 @@ class WaitForVideoWiringTest(unittest.TestCase):
             realtime=False,
             wait_for_video=30,
             live_from_start=True,
+            stream_format_diagnostic_file='selected-format.txt',
         )
 
     @staticmethod
-    def _open_and_get_popen(wait_for_video, live_from_start=False):
+    def _open_and_get_popen(wait_for_video, live_from_start=False, stream_format_diagnostic_file=None):
         ytdlp_process = mock.Mock(pid=11)
         ffmpeg_process = mock.Mock(pid=12)
         ffmpeg_builder = mock.Mock()
@@ -130,6 +153,7 @@ class WaitForVideoWiringTest(unittest.TestCase):
                 'workdir',
                 wait_for_video=wait_for_video,
                 live_from_start=live_from_start,
+                stream_format_diagnostic_file=stream_format_diagnostic_file,
             )
 
         transport_thread.start.assert_called_once_with()
@@ -142,8 +166,19 @@ class WaitForVideoWiringTest(unittest.TestCase):
         self.assertNotIn('--wait-for-video', command)
         self.assertNotIn('--live-from-start', command)
         self.assertIn('--quiet', command)
+        self.assertNotIn('--print-to-file', command)
         self.assertEqual(popen_call.kwargs['stdout'], subprocess.PIPE)
         self.assertIsNone(popen_call.kwargs['stderr'])
+        self.assertEqual(popen_call.kwargs['start_new_session'], os.name != 'nt')
+
+    def test_empty_format_diagnostic_file_is_not_passed_to_ytdlp(self):
+        for diagnostic_file in ('', '   '):
+            with self.subTest(diagnostic_file=diagnostic_file):
+                popen_call = self._open_and_get_popen(
+                    None,
+                    stream_format_diagnostic_file=diagnostic_file,
+                )
+                self.assertNotIn('--print-to-file', popen_call.args[0])
 
     def test_live_from_start_is_passed_once_and_coexists_with_waiting(self):
         popen_call = self._open_and_get_popen(30, live_from_start=True)
@@ -167,6 +202,41 @@ class WaitForVideoWiringTest(unittest.TestCase):
         self.assertEqual(popen_call.kwargs['stdout'], subprocess.PIPE)
         self.assertIsNone(popen_call.kwargs['stderr'])
 
+    def test_explicit_format_diagnostic_file_is_passed_to_ytdlp(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diagnostic_file = os.path.join(temp_dir, 'selected-format.txt')
+            with open(diagnostic_file, 'w', encoding='utf-8') as existing_file:
+                existing_file.write('stale format metadata')
+            popen_call = self._open_and_get_popen(
+                None,
+                stream_format_diagnostic_file=diagnostic_file,
+            )
+            with open(diagnostic_file, encoding='utf-8') as reset_file:
+                self.assertEqual(reset_file.read(), '')
+        command = popen_call.args[0]
+
+        diagnostic_index = command.index('--print-to-file')
+        diagnostic_template = command[diagnostic_index + 1]
+        self.assertTrue(diagnostic_template.startswith('before_dl:format_id='))
+        self.assertNotIn('%(url)', diagnostic_template)
+        self.assertEqual(command[diagnostic_index + 2], os.path.abspath(diagnostic_file))
+
+    def test_sigterm_uses_a_nonzero_exit_status(self):
+        getter = StreamAudioGetter(
+            url='https://example.test/live',
+            format='bestaudio',
+            cookies='',
+            proxy='',
+        )
+        getter.started.set()
+
+        with mock.patch.object(getter.finished, 'wait', return_value=True) as wait_for_cleanup, \
+                mock.patch('stream_translator_gpt.audio_getter.sys.exit') as exit_process:
+            getter._exit_handler(signal.SIGTERM, None)
+
+        wait_for_cleanup.assert_called_once_with(timeout=10.0)
+        exit_process.assert_called_once_with(128 + signal.SIGTERM)
+
     def test_signal_stops_children_while_waiting_for_stream(self):
         getter = StreamAudioGetter(
             url='https://example.test/live',
@@ -185,8 +255,10 @@ class WaitForVideoWiringTest(unittest.TestCase):
         self.assertTrue(getter.stop_event.is_set())
         getter.ffmpeg_process.kill.assert_called_once_with()
         getter.ytdlp_process.kill.assert_called_once_with()
-        self.assertFalse(os.path.exists(temp_dir))
+        self.assertTrue(os.path.exists(temp_dir))
         exit_process.assert_called_once_with(0)
+        getter.__del__()
+        self.assertFalse(os.path.exists(temp_dir))
 
 
 if __name__ == '__main__':

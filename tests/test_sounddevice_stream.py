@@ -70,6 +70,46 @@ def _drain(audio_queue):
 
 class SoundDeviceStreamTest(unittest.TestCase):
 
+    def test_stop_is_idempotent_and_wakes_capture_without_owner_cleanup(self):
+        input_stream = _FakeInputStreamFactory([])
+        getter = _make_getter(input_stream)
+        stream = mock.Mock()
+        getter.stream = stream
+        for value in range(getter.recording_queue.maxsize):
+            getter.recording_queue.put_nowait(np.array([value], dtype=np.float32))
+
+        getter.stop()
+        getter.stop()
+
+        self.assertTrue(getter.stopping.is_set())
+        self.assertTrue(getter.cancel_requested.is_set())
+        stream.abort.assert_called_once_with()
+        self.assertEqual(_drain(getter.recording_queue), [None])
+
+    def test_stop_before_loop_skips_device_open_and_emits_one_sentinel(self):
+        input_stream = _FakeInputStreamFactory([])
+        getter = _make_getter(input_stream)
+        output_queue = queue.SimpleQueue()
+
+        getter.stop()
+        getter.stop()
+        getter.loop(output_queue)
+
+        self.assertFalse(input_stream.entered)
+        self.assertEqual(_drain(output_queue), [None])
+        self.assertTrue(getter.finished.is_set())
+
+    def test_stream_failure_is_propagated_after_terminal_sentinel(self):
+        input_stream = mock.Mock(side_effect=RuntimeError('sounddevice failed'))
+        getter = _make_getter(input_stream)
+        output_queue = queue.SimpleQueue()
+
+        with self.assertRaisesRegex(RuntimeError, 'sounddevice failed'):
+            getter.loop(output_queue)
+
+        self.assertEqual(_drain(output_queue), [None])
+        self.assertTrue(getter.finished.is_set())
+
     def test_callback_copies_status_block_and_still_processes_it(self):
         callback_buffer = np.full((SAMPLES_PER_FRAME, 1), 0.25, dtype=np.float32)
         input_stream = _FakeInputStreamFactory([(callback_buffer, 'input overflow', True)])

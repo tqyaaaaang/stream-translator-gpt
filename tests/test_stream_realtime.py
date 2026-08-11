@@ -3,13 +3,13 @@ import signal
 import unittest
 from unittest import mock
 
-from stream_translator_gpt.audio_getter import StreamAudioGetter
+from stream_translator_gpt.audio_getter import StreamAudioGetter, _StreamTransportStats
 from stream_translator_gpt.main import Config, _create_audio_getter
 
 
 class StreamRealtimeConfigTest(unittest.TestCase):
 
-    def test_modulate_url_enables_realtime_stream_pacing(self):
+    def test_modulate_url_paces_fragment_bursts_for_the_streaming_api(self):
         sentinel = object()
         config = Config(url='https://example.test/live',
                         use_modulate_transcription_api=True,
@@ -25,7 +25,8 @@ class StreamRealtimeConfigTest(unittest.TestCase):
                                           proxy=config.input_proxy,
                                           realtime=True,
                                           wait_for_video=None,
-                                          live_from_start=False)
+                                          live_from_start=False,
+                                          stream_format_diagnostic_file=None)
 
     def test_non_modulate_url_keeps_legacy_unpaced_stream_behavior(self):
         sentinel = object()
@@ -41,7 +42,8 @@ class StreamRealtimeConfigTest(unittest.TestCase):
                                           proxy=config.input_proxy,
                                           realtime=False,
                                           wait_for_video=None,
-                                          live_from_start=False)
+                                          live_from_start=False,
+                                          stream_format_diagnostic_file=None)
 
 
 class StreamRealtimeLoopTest(unittest.TestCase):
@@ -58,13 +60,14 @@ class StreamRealtimeLoopTest(unittest.TestCase):
         ytdlp_process = mock.Mock()
         transport_thread = mock.Mock()
         transport_thread.is_alive.return_value = False
+        transport_stats = _StreamTransportStats(started_at=0.0, media_bytes=2048, ytdlp_return_code=0)
         output_queue = queue.SimpleQueue()
         pacer = object()
 
         patches = (
             mock.patch('stream_translator_gpt.audio_getter._open_stream',
-                       return_value=(ffmpeg_process, ytdlp_process, transport_thread)),
-            mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop'),
+                       return_value=(ffmpeg_process, ytdlp_process, transport_thread, transport_stats)),
+            mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', return_value=1),
             mock.patch('stream_translator_gpt.audio_getter._wait_for_process', return_value=0),
             mock.patch('stream_translator_gpt.audio_getter._RealtimeAudioPacer', return_value=pacer),
         )
@@ -101,6 +104,7 @@ class StreamRealtimeLoopTest(unittest.TestCase):
             getter.temp_dir,
             wait_for_video=None,
             live_from_start=True,
+            stream_format_diagnostic_file=None,
         )
 
     def test_exit_signal_interrupts_realtime_pacer_wait(self):
