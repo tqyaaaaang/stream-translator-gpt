@@ -130,7 +130,7 @@ stream-translator-gpt URL [OPTIONS]
 - **Modulate Multilingual Transcription — Streaming**: ```stream-translator-gpt {URL} --use-modulate-transcription-api --modulate-api-key {Modulate キー}```
 - **HuggingFace ASR** モデル（`pip install stream-translator-gpt[hf_asr]` が必要。Hugging Face Hub で `pipeline_tag` が `automatic-speech-recognition` のモデルのみ対応）: ```stream-translator-gpt {URL} --model {HF モデル名} --use-hf-asr```
 
-Modulate バックエンドは Silero VAD を使わず、16 kHz 音声をモデルのストリーミングモードへ直接送信します。モデルが完了した各 utterance は新しい文になります。partial result を継続的に監視し、現在の未確定文の最初の文字（または分割時に既に存在する後続テキスト）から `--modulate-partial-cutoff-seconds` を超えると、その後に現れる最初の全角または半角の句読点で現在の区間を確定します。文と文の間の無音時間は、次の文の待機時間には含まれません。予期しない通信切断時は指数バックオフで再接続し、成功後に直近の final 結果以降に受信した音声を最大 120 秒分リプレイします。明示的な認証、クォータ、および API エラーは再試行しません。ローカルファイルでは、タイムアウト判定をメディアの時間軸に合わせるため、リアルタイム再生を使用してください：
+Modulate バックエンドは Silero VAD を使わず、16 kHz 音声をモデルのストリーミングモードへ直接送信します。モデルが完了した各 utterance は新しい文になります。partial result を継続的に監視し、現在の未確定文の最初の文字（または分割時に既に存在する後続テキスト）から `--modulate-partial-cutoff-seconds` を超えると、その後に現れる最初の全角または半角の句読点で現在の区間を確定します。文と文の間の無音時間は、次の文の待機時間には含まれません。URL のライブストリームでは、ライブエッジにいる間は通常ソースの速度で Modulate へ送信し、再接続時のリプレイデータまたはライブ入力キューに滞留がある間は、追いつくまで最大 1.5 倍速で送信します。予期しない通信切断時は指数バックオフで再接続し、成功後に直近の final 結果以降に受信した音声を最大 10 分間リプレイします。明示的な認証、クォータ、および API エラーは再試行しません。ローカルファイルでは、タイムアウト判定をメディアの時間軸に合わせるため、リアルタイム再生を使用してください：
 
 ```bash
 stream-translator-gpt {ファイルパス} --local-file-mode realtime --use-modulate-transcription-api --modulate-api-key {Modulate キー}
@@ -213,7 +213,7 @@ stream-translator-gpt {ファイルパス} --local-file-mode realtime --use-modu
 | `--use-modulate-transcription-api` |                                | Modulate Multilingual Transcription — Streaming を使用し、16 kHz 音声を直接ストリーミングして Silero VAD をバイパスします。                                                                                               |
 | `--modulate-partial-cutoff-seconds` | 10.0                           | 現在の未確定文の最初の文字からこの秒数を超えると、その後の最初の全角または半角の句読点で確定します。それ以前の無音時間は含まれません。                                                                      |
 | `--modulate-reconnect-attempts`    | 3                              | Modulate の予期しない通信切断後に行う再接続の最大試行回数です。明示的な認証、クォータ、および API エラーは再試行しません。                                                                                                 |
-| `--modulate-reconnect-backoff-seconds` | 1.0                        | 最初の再接続までの待機秒数です。以降は指数バックオフを使用し、再接続後は直近の final 結果以降の音声を最大 120 秒分リプレイします。                                                                                           |
+| `--modulate-reconnect-backoff-seconds` | 1.0                        | 最初の再接続までの待機秒数です。以降は指数バックオフを使用し、再接続後は直近の final 結果以降の音声を最大 10 分間リプレイします。                                                                                           |
 | `--modulate-websocket-compression` | False                          | Modulate の WebSocket per-message deflate を有効にします。圧縮はネットワーク帯域を削減できますが CPU 負荷が増えます。デフォルトは非圧縮で、CPU リソースが限られネットワーク条件が良い環境を優先します。                        |
 | `--openai-transcription-model`     | gpt-transcribe                 | OpenAI 文字起こしモデル。通常の文字起こしには `gpt-transcribe` を推奨。`whisper-1`、`gpt-4o-mini-transcribe`、`gpt-4o-transcribe` も使用できます。                                                                         |
 | `--use-hf-asr`                     |                                | HuggingFace ASR モデルを使用。`--model` でモデル ID を指定。`pip install stream-translator-gpt[hf_asr]` が必要。                                                                                                           |

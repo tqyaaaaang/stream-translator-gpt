@@ -1,4 +1,5 @@
 import json
+import math
 import queue
 import ssl
 import threading
@@ -13,9 +14,12 @@ from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.frames import Close
 from websockets.http11 import Response
 
+from stream_translator_gpt.common import SAMPLE_RATE, SAMPLES_PER_FRAME
 from stream_translator_gpt.main import Config, _validate_and_normalize
-from stream_translator_gpt.modulate_transcriber import (ModulateStreamingError, ModulateStreamingTranscriber,
-                                                        _AudioStreamState)
+from stream_translator_gpt.modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_REPLAY_SECONDS,
+                                                        MODULATE_STREAM_MAX_SEND_RATE, ModulateStreamingError,
+                                                        ModulateStreamingTranscriber, _AudioSendPacer,
+                                                        _AudioSendProgress, _AudioStreamState)
 
 
 def _transcriber(**overrides):
@@ -59,6 +63,42 @@ def _websocket_close(code: int) -> ConnectionClosedError:
 
 def _handshake_status(status_code: int) -> InvalidStatus:
     return InvalidStatus(Response(status_code, 'test response', Headers()))
+
+
+class _FakeClock:
+
+    def __init__(self, now=0.0):
+        self.now = float(now)
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+class _FakeStopEvent:
+
+    def __init__(self, clock: _FakeClock):
+        self.clock = clock
+        self.wait_calls = []
+        self.stopped = False
+        self.interrupt_next_wait = False
+
+    def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
+        if self.interrupt_next_wait:
+            self.stopped = True
+            return True
+        if timeout is not None:
+            self.clock.advance(timeout)
+        return self.stopped
+
+    def is_set(self):
+        return self.stopped
+
+    def set(self):
+        self.stopped = True
 
 
 class _FakeWebSocket:
@@ -220,6 +260,109 @@ class _GatedDisconnectInputQueue:
             if not self.remaining:
                 raise queue.Empty
             return self.remaining.pop(0)
+
+
+class AudioSendPacerTest(unittest.TestCase):
+
+    def test_fake_clock_limits_consecutive_audio_to_one_point_five_times_realtime(self):
+        clock = _FakeClock()
+        stop_event = _FakeStopEvent(clock)
+        pacer = _AudioSendPacer(MODULATE_STREAM_MAX_SEND_RATE, stop_event, clock=clock)
+
+        self.assertTrue(pacer.wait_until_ready())
+        pacer.record_sent(SAMPLE_RATE)
+        self.assertTrue(pacer.wait_until_ready())
+
+        self.assertAlmostEqual(clock.now, 1 / MODULATE_STREAM_MAX_SEND_RATE)
+        self.assertEqual(len(stop_event.wait_calls), 1)
+        self.assertAlmostEqual(stop_event.wait_calls[0], 1 / MODULATE_STREAM_MAX_SEND_RATE)
+
+    def test_idle_time_does_not_accumulate_send_credit(self):
+        clock = _FakeClock()
+        stop_event = _FakeStopEvent(clock)
+        pacer = _AudioSendPacer(MODULATE_STREAM_MAX_SEND_RATE, stop_event, clock=clock)
+
+        pacer.record_sent(SAMPLE_RATE)
+        clock.advance(10.0)
+        self.assertTrue(pacer.wait_until_ready())
+        self.assertEqual(stop_event.wait_calls, [])
+
+        pacer.record_sent(SAMPLE_RATE)
+        self.assertTrue(pacer.wait_until_ready())
+        self.assertEqual(len(stop_event.wait_calls), 1)
+        self.assertAlmostEqual(stop_event.wait_calls[0], 1 / MODULATE_STREAM_MAX_SEND_RATE)
+
+    def test_stop_event_interrupts_pacing_wait(self):
+        clock = _FakeClock()
+        stop_event = _FakeStopEvent(clock)
+        pacer = _AudioSendPacer(MODULATE_STREAM_MAX_SEND_RATE, stop_event, clock=clock)
+        pacer.record_sent(SAMPLE_RATE)
+        stop_event.interrupt_next_wait = True
+
+        self.assertFalse(pacer.wait_until_ready())
+        self.assertEqual(len(stop_event.wait_calls), 1)
+        self.assertAlmostEqual(stop_event.wait_calls[0], 1 / MODULATE_STREAM_MAX_SEND_RATE)
+        self.assertEqual(clock.now, 0.0)
+
+    def test_replay_and_queued_live_audio_share_one_pacer(self):
+        clock = _FakeClock()
+        stop_event = _FakeStopEvent(clock)
+        replay = np.zeros(SAMPLES_PER_FRAME, dtype=np.float32)
+        live = np.ones(SAMPLES_PER_FRAME, dtype=np.float32)
+        stream_state = _AudioStreamState()
+        replay_payload, _ = stream_state.add_audio(replay)
+        input_queue = queue.SimpleQueue()
+        input_queue.put(live)
+        input_queue.put(None)
+        sent_at = []
+
+        class TimestampingWebSocket:
+
+            def send(self, value):
+                sent_at.append((value, clock()))
+
+        transcriber = _transcriber(max_audio_send_rate=MODULATE_STREAM_MAX_SEND_RATE, clock=clock)
+        errors = queue.SimpleQueue()
+        replay_payloads = [replay_payload]
+        transcriber._send_audio(TimestampingWebSocket(), input_queue, stream_state, replay_payloads, False,
+                                stop_event, errors, _AudioSendProgress())
+
+        binary_sends = [(payload, timestamp) for payload, timestamp in sent_at if isinstance(payload, bytes)]
+        self.assertEqual([payload for payload, _ in binary_sends],
+                         [replay.astype('<f4').tobytes(), live.astype('<f4').tobytes()])
+        self.assertAlmostEqual(binary_sends[0][1], 0.0)
+        self.assertAlmostEqual(binary_sends[1][1],
+                               SAMPLES_PER_FRAME / SAMPLE_RATE / MODULATE_STREAM_MAX_SEND_RATE)
+        self.assertEqual(sent_at[-1][0], '')
+        self.assertEqual(replay_payloads, [])
+        with self.assertRaises(queue.Empty):
+            errors.get_nowait()
+
+    def test_live_audio_dequeued_before_interrupted_wait_remains_replayable(self):
+        clock = _FakeClock()
+        stop_event = _FakeStopEvent(clock)
+        stop_event.interrupt_next_wait = True
+        first = np.zeros(SAMPLES_PER_FRAME, dtype=np.float32)
+        queued_live = np.ones(SAMPLES_PER_FRAME, dtype=np.float32)
+        stream_state = _AudioStreamState()
+        first_payload, _ = stream_state.add_audio(first)
+        input_queue = queue.SimpleQueue()
+        input_queue.put(queued_live)
+        sent = []
+
+        class RecordingWebSocket:
+
+            def send(self, value):
+                sent.append(value)
+
+        transcriber = _transcriber(max_audio_send_rate=MODULATE_STREAM_MAX_SEND_RATE, clock=clock)
+        transcriber._send_audio(RecordingWebSocket(), input_queue, stream_state, [first_payload], False,
+                                stop_event, queue.SimpleQueue(), _AudioSendProgress())
+
+        _, replay_payloads, _ = stream_state.replay_snapshot()
+        self.assertEqual([value for value in sent if isinstance(value, bytes)], [first_payload])
+        self.assertEqual(replay_payloads,
+                         [first.astype('<f4').tobytes(), queued_live.astype('<f4').tobytes()])
 
 
 class ModulateProtocolTest(unittest.TestCase):
@@ -1244,7 +1387,7 @@ class ModulateConfigTest(unittest.TestCase):
     def test_run_bypasses_slicer_and_connects_getter_queue_directly(self):
         from stream_translator_gpt import main
 
-        config = Config(url='input', use_modulate_transcription_api=True, modulate_api_key='key',
+        config = Config(url='https://example.test/live', use_modulate_transcription_api=True, modulate_api_key='key',
                         modulate_websocket_compression=True)
         fake_getter = mock.Mock()
         fake_transcriber = mock.Mock()
@@ -1268,12 +1411,15 @@ class ModulateConfigTest(unittest.TestCase):
         client_pool.init.assert_called_once()
         constructor.assert_called_once()
         self.assertTrue(constructor.call_args.kwargs['websocket_compression'])
+        self.assertEqual(constructor.call_args.kwargs['max_audio_send_rate'], MODULATE_STREAM_MAX_SEND_RATE)
         names = [kwargs.get('name') for _, kwargs in worker_calls]
         self.assertEqual(names, ['getter', 'transcriber', 'exporter'])
         getter_queue = worker_calls[0][1]['output_queue']
         transcriber_queue = worker_calls[1][1]['input_queue']
         self.assertIs(getter_queue, transcriber_queue)
-        self.assertEqual(getter_queue.maxsize, 3750)
+        expected_chunks = math.ceil(MODULATE_INPUT_QUEUE_SECONDS * SAMPLE_RATE / SAMPLES_PER_FRAME)
+        self.assertEqual(expected_chunks, 18750)
+        self.assertEqual(getter_queue.maxsize, expected_chunks)
         expected_signals = [mock.call(main.signal.SIGINT, fake_getter._exit_handler)]
         if hasattr(main.signal, 'SIGTERM'):
             expected_signals.append(mock.call(main.signal.SIGTERM, fake_getter._exit_handler))
@@ -1281,6 +1427,12 @@ class ModulateConfigTest(unittest.TestCase):
 
 
 class AudioReplayStateTest(unittest.TestCase):
+
+    def test_default_replay_capacity_is_ten_minutes(self):
+        state = _AudioStreamState()
+
+        self.assertEqual(MODULATE_REPLAY_SECONDS, 600)
+        self.assertEqual(state._max_replay_samples, 600 * SAMPLE_RATE)
 
     def test_acknowledgement_trims_replay_at_exact_sample(self):
         state = _AudioStreamState(max_replay_seconds=10)

@@ -9,7 +9,7 @@ from stream_translator_gpt.main import Config, _create_audio_getter
 
 class StreamRealtimeConfigTest(unittest.TestCase):
 
-    def test_modulate_url_paces_fragment_bursts_for_the_streaming_api(self):
+    def test_modulate_url_leaves_getter_unpaced_for_transcriber_level_rate_limit(self):
         sentinel = object()
         config = Config(url='https://example.test/live',
                         use_modulate_transcription_api=True,
@@ -23,7 +23,7 @@ class StreamRealtimeConfigTest(unittest.TestCase):
                                           format=config.format,
                                           cookies=config.cookies,
                                           proxy=config.input_proxy,
-                                          realtime=True,
+                                          realtime=False,
                                           wait_for_video=None,
                                           live_from_start=False,
                                           stream_format_diagnostic_file=None)

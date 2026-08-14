@@ -22,7 +22,8 @@ if __name__ == '__main__':
 from .common import ClientPool, SAMPLE_RATE, SAMPLES_PER_FRAME, start_daemon_thread, is_url
 from .audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAudioGetter, StreamAudioGetter
 from .audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
-from .modulate_transcriber import MODULATE_REPLAY_SECONDS, ModulateStreamingTranscriber
+from .modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_STREAM_MAX_SEND_RATE,
+                                   ModulateStreamingTranscriber)
 from .llm_translator import GPTTranslator, GeminiTranslator, _gpt_model_version
 from .result_exporter import ResultExporter
 from .logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
@@ -360,9 +361,9 @@ def _create_audio_getter(config: Config):
             format=config.format,
             cookies=config.cookies,
             proxy=config.input_proxy,
-            # yt-dlp can deliver complete HLS/DASH fragments in bursts. Preserve
-            # smooth playback pacing before forwarding them to a streaming API.
-            realtime=config.use_modulate_transcription_api,
+            # The Modulate sender applies one continuous rate limit across
+            # fragment bursts, reconnect replay, and queued live audio.
+            realtime=False,
             wait_for_video=config.wait_for_video,
             live_from_start=config.live_from_start,
             stream_format_diagnostic_file=config.stream_format_diagnostic_file,
@@ -399,7 +400,7 @@ def run(config: Config):
                     verify_ssl=config.verify_ssl)
 
     # Init queues
-    modulate_buffer_chunks = math.ceil(MODULATE_REPLAY_SECONDS * SAMPLE_RATE / SAMPLES_PER_FRAME)
+    modulate_buffer_chunks = math.ceil(MODULATE_INPUT_QUEUE_SECONDS * SAMPLE_RATE / SAMPLES_PER_FRAME)
     getter_to_slicer_queue = (queue.Queue(maxsize=modulate_buffer_chunks)
                               if config.use_modulate_transcription_api else queue.SimpleQueue())
     slicer_to_transcriber_queue = queue.SimpleQueue()
@@ -446,6 +447,7 @@ def run(config: Config):
                     proxy=config.processing_proxy,
                     verify_ssl=config.verify_ssl,
                     websocket_compression=config.modulate_websocket_compression,
+                    max_audio_send_rate=(MODULATE_STREAM_MAX_SEND_RATE if is_url(config.url) else None),
                     language=config.language,
                     **common_args,
                 )

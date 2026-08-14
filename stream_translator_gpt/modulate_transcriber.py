@@ -19,7 +19,9 @@ from .common import SAMPLE_RATE, TranslationTask, sec2str, write_console_utf8
 logger = logging.getLogger('main')
 
 MODULATE_STREAMING_ENDPOINT = 'wss://platform.modulate.ai/api/velma-2-stt-streaming'
-MODULATE_REPLAY_SECONDS = 120
+MODULATE_REPLAY_SECONDS = 600
+MODULATE_INPUT_QUEUE_SECONDS = 600
+MODULATE_STREAM_MAX_SEND_RATE = 1.5
 NON_RETRYABLE_CLOSE_CODES = frozenset({
     1002,  # protocol error
     1003,  # unsupported / invalid configuration
@@ -285,6 +287,31 @@ class _AudioSendProgress:
             return self._samples_sent / SAMPLE_RATE
 
 
+class _AudioSendPacer:
+    """Limit ready-to-send audio without accumulating burst credit while idle."""
+
+    def __init__(self, max_rate: float, stop_event: threading.Event, clock=None):
+        if not math.isfinite(max_rate) or max_rate <= 0:
+            raise ValueError('Audio send rate must be a finite value greater than zero')
+        self.max_rate = float(max_rate)
+        self.stop_event = stop_event
+        self.clock = clock or time.monotonic
+        self.next_allowed_at = None
+
+    def wait_until_ready(self) -> bool:
+        while self.next_allowed_at is not None:
+            delay = self.next_allowed_at - self.clock()
+            if delay <= 0:
+                break
+            if self.stop_event.wait(delay):
+                return False
+        return not self.stop_event.is_set()
+
+    def record_sent(self, sample_count: int) -> None:
+        now = self.clock()
+        self.next_allowed_at = now + sample_count / SAMPLE_RATE / self.max_rate
+
+
 class ModulateStreamingTranscriber(AudioTranscriber):
     """Stream raw getter audio directly to Modulate without VAD slicing."""
 
@@ -299,6 +326,7 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                  clock=None,
                  sleeper=None,
                  websocket_compression: bool = False,
+                 max_audio_send_rate: float | None = None,
                  **kwargs):
         super().__init__(**kwargs)
         api_key = (api_key or '').strip()
@@ -308,6 +336,11 @@ class ModulateStreamingTranscriber(AudioTranscriber):
         self.proxy = proxy
         self.verify_ssl = verify_ssl
         self.websocket_compression = bool(websocket_compression)
+        if (max_audio_send_rate is not None
+                and (not math.isfinite(max_audio_send_rate) or max_audio_send_rate <= 0)):
+            raise ValueError('Modulate maximum audio send rate must be a finite value greater than zero')
+        self.max_audio_send_rate = (float(max_audio_send_rate) if max_audio_send_rate is not None else None)
+        self.clock = clock or time.monotonic
         if reconnect_attempts < 0:
             raise ValueError('Modulate reconnect attempts must be zero or greater')
         if not math.isfinite(reconnect_backoff_seconds) or reconnect_backoff_seconds < 0:
@@ -619,18 +652,35 @@ class ModulateStreamingTranscriber(AudioTranscriber):
     def _send_audio(self, websocket, input_queue, stream_state: _AudioStreamState, replay_payloads: list[bytes],
                     replay_reaches_eof: bool, stop_event: threading.Event, error_queue: queue.SimpleQueue,
                     send_progress: _AudioSendProgress):
+        pacer = (_AudioSendPacer(self.max_audio_send_rate, stop_event, clock=self.clock)
+                 if self.max_audio_send_rate is not None else None)
+
+        def send_payload(payload: bytes, source: str) -> bool:
+            if pacer is not None and not pacer.wait_until_ready():
+                return False
+            websocket.send(payload)
+            self._record_sent_payload(payload, source, stream_state, send_progress)
+            if pacer is not None:
+                pacer.record_sent(len(payload) // np.dtype('<f4').itemsize)
+            return True
+
         try:
-            for payload in replay_payloads:
-                if stop_event.is_set():
-                    return
-                try:
-                    websocket.send(payload)
-                    self._record_sent_payload(payload, 'replay', stream_state, send_progress)
-                except Exception as exc:
-                    self._queue_error(error_queue, exc, retryable=self._transport_retryability(exc) is True)
-                    stop_event.set()
-                    self._interrupt_websocket(websocket)
-                    return
+            try:
+                for payload in replay_payloads:
+                    if stop_event.is_set():
+                        return
+                    try:
+                        if not send_payload(payload, 'replay'):
+                            return
+                    except Exception as exc:
+                        self._queue_error(error_queue, exc, retryable=self._transport_retryability(exc) is True)
+                        stop_event.set()
+                        self._interrupt_websocket(websocket)
+                        return
+            finally:
+                # A large reconnect snapshot can otherwise keep already
+                # acknowledged payloads alive for the rest of the connection.
+                replay_payloads.clear()
 
             if replay_reaches_eof:
                 websocket.send('')
@@ -655,8 +705,8 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                     return
                 if sample_count == 0:
                     continue
-                websocket.send(payload)
-                self._record_sent_payload(payload, 'live', stream_state, send_progress)
+                if not send_payload(payload, 'live'):
+                    return
         except Exception as exc:
             self._queue_error(error_queue, exc, retryable=self._transport_retryability(exc) is True)
             stop_event.set()

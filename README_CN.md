@@ -130,7 +130,7 @@ stream-translator-gpt URL [OPTIONS]
 - **Modulate Multilingual Transcription — Streaming**: ```stream-translator-gpt {网址} --use-modulate-transcription-api --modulate-api-key {你的 Modulate key}```
 - **HuggingFace ASR** 模型（需要 `pip install stream-translator-gpt[hf_asr]`；仅支持 Hugging Face Hub 上 `pipeline_tag` 为 `automatic-speech-recognition` 的模型）: ```stream-translator-gpt {网址} --model {hf_模型名} --use-hf-asr```
 
-Modulate 后端不使用 Silero VAD，而是把 16 kHz 音频直接发送给模型的流式模式；模型完成的每个 utterance 都会成为一个新句子。程序会持续监控 partial result：从当前未提交句子的第一个字（或切断时已存在的后续文字）开始计时，超过 `--modulate-partial-cutoff-seconds` 后，会在随后出现的第一个全角或半角标点处提交当前分段；句子之间的静音不会占用下一句的等待时间。发生意外传输中断时，程序会按指数退避重连；重连成功后，会重放上一个 final 结果之后收到的、最多 120 秒音频。显式认证、额度和 API 错误不会重试。处理本地文件时，请使用实时播放，让超时判断与媒体时间一致：
+Modulate 后端不使用 Silero VAD，而是把 16 kHz 音频直接发送给模型的流式模式；模型完成的每个 utterance 都会成为一个新句子。程序会持续监控 partial result：从当前未提交句子的第一个字（或切断时已存在的后续文字）开始计时，超过 `--modulate-partial-cutoff-seconds` 后，会在随后出现的第一个全角或半角标点处提交当前分段；句子之间的静音不会占用下一句的等待时间。对于 URL 直播流，Modulate 在直播边缘通常按音源速率发送；只要重连重放数据或实时输入队列中仍有积压，就会以最高 1.5 倍音源速率发送来追赶进度。发生意外传输中断时，程序会按指数退避重连；重连成功后，会重放上一个 final 结果之后收到的、最多 10 分钟音频。显式认证、额度和 API 错误不会重试。处理本地文件时，请使用实时播放，让超时判断与媒体时间一致：
 
 ```bash
 stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-transcription-api --modulate-api-key {你的 Modulate key}
@@ -213,7 +213,7 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--use-modulate-transcription-api` |                                | 使用 Modulate Multilingual Transcription — Streaming，直接流式处理 16 kHz 音频并绕过 Silero VAD。                                                                            |
 | `--modulate-partial-cutoff-seconds` | 10.0                           | 从当前未提交句子的第一个字开始超过该秒数后，在随后出现的第一个全角或半角标点处提交；此前的静音不计入等待时间。                                                                        |
 | `--modulate-reconnect-attempts`    | 3                              | Modulate 意外传输中断后的最大重连次数；显式认证、额度和 API 错误不会重试。                                                                                                    |
-| `--modulate-reconnect-backoff-seconds` | 1.0                        | 首次重连等待秒数；后续重试采用指数退避。重连成功后会重放上一个 final 结果之后收到的、最多 120 秒音频。                                                                       |
+| `--modulate-reconnect-backoff-seconds` | 1.0                        | 首次重连等待秒数；后续重试采用指数退避。重连成功后会重放上一个 final 结果之后收到的、最多 10 分钟音频。                                                                       |
 | `--modulate-websocket-compression` | False                          | 为 Modulate 启用 WebSocket per-message deflate。压缩可减少网络带宽，但会增加 CPU 开销；默认不压缩，更适合 CPU 资源紧张而网络条件较好的部署。                                  |
 | `--openai-transcription-model`     | gpt-transcribe                 | OpenAI 转录模型。普通转录推荐使用 `gpt-transcribe`；也支持 `whisper-1`、`gpt-4o-mini-transcribe` 和 `gpt-4o-transcribe`。                                                     |
 | `--use-hf-asr`                     |                                | 使用 HuggingFace ASR 模型，用 `--model` 指定模型 ID。需要 `pip install stream-translator-gpt[hf_asr]`。                                                                       |
