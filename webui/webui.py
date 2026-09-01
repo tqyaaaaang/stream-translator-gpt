@@ -101,7 +101,7 @@ os.makedirs(USER_PRESETS_DIR, exist_ok=True)
 
 INPUT_KEYS = [
     "input_type", "input_url", "device_rec_interval", "audio_source", "device_audio_getter", "device_multiplier",
-    "input_file", "local_file_mode", "input_format", "input_cookies",
+    "input_file", "pacer", "input_format", "input_cookies",
     "input_proxy", "openai_key", "google_key", "openai_base_url", "google_base_url", "openai_key_trans",
     "openai_base_url_trans", "overall_proxy", "model_size", "hf_model_name", "language", "whisper_backend",
     "openai_transcription_model", "vad_threshold", "min_audio_len", "max_audio_len", "target_audio_len",
@@ -152,8 +152,11 @@ def migrate_preset_data(data):
     """Migrate configuration values whose WebUI representation has changed."""
     if not isinstance(data, dict):
         return data
+    data = data.copy()
+    if "pacer" not in data and "local_file_mode" in data:
+        data["pacer"] = "realtime" if data["local_file_mode"] == "realtime" else "unlimited"
+    data.pop("local_file_mode", None)
     if "filter_language_based" in data:
-        data = data.copy()
         data["filter_language_based"] = normalize_language_filters(
             data["filter_language_based"], data.get("language", "auto"))
     return data
@@ -362,7 +365,7 @@ def build_translator_command(
         whisper_base_url=None,
         device_audio_getter='pyaudio',
         device_multiplier=1.0,
-        local_file_mode='offline',
+        pacer='unlimited',
         modulate_api_key=None,
         modulate_partial_cutoff_seconds=10.0,
         openai_translation_api='auto',
@@ -422,10 +425,10 @@ def build_translator_command(
     elif input_type == "File":
         if not file_path:
             return None, "Error: File path is required.\n"
-        add_arg("--local-file-mode", local_file_mode, "local_file_mode")
         target_url = file_path
 
     cmd.append(target_url)
+    add_arg("--pacer", pacer, "pacer")
 
     if input_type == "URL":
         if input_format:
@@ -642,7 +645,7 @@ def run_translator(
         whisper_base_url,
         device_audio_getter,
         device_multiplier,
-        local_file_mode,
+        pacer,
         modulate_api_key,
         modulate_partial_cutoff_seconds,
         openai_translation_api,
@@ -731,7 +734,7 @@ def run_translator(
                                           whisper_base_url=effective_whisper_base_url,
                                           device_audio_getter=device_audio_getter,
                                           device_multiplier=device_multiplier,
-                                          local_file_mode=local_file_mode,
+                                          pacer=pacer,
                                           modulate_api_key=modulate_api_key,
                                           modulate_partial_cutoff_seconds=modulate_partial_cutoff_seconds,
                                           openai_translation_api=openai_translation_api,
@@ -872,11 +875,12 @@ with gr.Blocks() as demo:
 
             with gr.Group(visible=False) as file_group:
                 input_file = gr.File(label=i18n.get("local_file_path"), type="filepath", file_count="single")
-                local_file_mode = gr.Dropdown(choices=[(i18n.get("local_file_offline"), "offline"),
-                                                       (i18n.get("local_file_realtime"), "realtime")],
-                                              value=get_default("local_file_mode"),
-                                              label=i18n.get("local_file_mode"),
-                                              info=i18n.get("local_file_mode_info"))
+
+            pacer = gr.Dropdown(choices=[(i18n.get("pacer_unlimited"), "unlimited"),
+                                         (i18n.get("pacer_realtime"), "realtime")],
+                                 value=get_default("pacer"),
+                                 label=i18n.get("pacer"),
+                                 info=i18n.get("pacer_info"))
 
         with gr.Tab(i18n.get("audio_slicing")):
             modulate_vad_bypass_notice = gr.Markdown(i18n.get("modulate_vad_bypass_info"), visible=False)
@@ -1264,7 +1268,7 @@ with gr.Blocks() as demo:
                         openai_base_url, google_base_url, processing_proxy, use_json_result, retry_if_translation_fails,
                         show_timestamps, hide_transcription, output_file, output_proxy, cqhttp_url, cqhttp_token,
                         discord_hook, telegram_token, telegram_chat_id, extra_cli_args, openai_key_trans,
-                        openai_base_url_trans, device_audio_getter, device_multiplier, local_file_mode,
+                        openai_base_url_trans, device_audio_getter, device_multiplier, pacer,
                         modulate_api_key, modulate_partial_cutoff_seconds, openai_translation_api,
                         openai_prompt_cache, prompt_cache_key, use_translation_context, output_file_timestamps
                     ],
@@ -1389,7 +1393,19 @@ with gr.Blocks() as demo:
         const values = args.map((defaultVal, index) => {{
             const key = keys[index];
 
-            const stored = localStorage.getItem(key);
+            let stored = localStorage.getItem(key);
+            if (stored === null && key === "pacer") {{
+                const legacy = localStorage.getItem("local_file_mode");
+                if (legacy !== null) {{
+                    try {{
+                        stored = JSON.stringify(JSON.parse(legacy) === "realtime" ? "realtime" : "unlimited");
+                        localStorage.setItem("pacer", stored);
+                    }} catch (e) {{
+                        stored = null;
+                    }}
+                    localStorage.removeItem("local_file_mode");
+                }}
+            }}
             if (stored === null) return defaultVal;
             try {{
                 const val = JSON.parse(stored);

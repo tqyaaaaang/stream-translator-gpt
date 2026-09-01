@@ -1384,6 +1384,23 @@ class ModulateConfigTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             _validate_and_normalize(config)
 
+    def test_local_file_guidance_uses_unified_pacer_option(self):
+        from stream_translator_gpt import main
+
+        common = {
+            'url': 'input.mp3',
+            'use_modulate_transcription_api': True,
+            'modulate_api_key': 'key',
+        }
+        with mock.patch.object(main.logger, 'warning') as warning:
+            _validate_and_normalize(Config(**common, pacer='unlimited'))
+        warning.assert_called_once()
+        self.assertIn('--pacer realtime', warning.call_args.args[0])
+
+        with mock.patch.object(main.logger, 'warning') as warning:
+            _validate_and_normalize(Config(**common, pacer='realtime'))
+        warning.assert_not_called()
+
     def test_run_bypasses_slicer_and_connects_getter_queue_directly(self):
         from stream_translator_gpt import main
 

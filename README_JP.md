@@ -133,7 +133,7 @@ stream-translator-gpt URL [OPTIONS]
 Modulate バックエンドは Silero VAD を使わず、16 kHz 音声をモデルのストリーミングモードへ直接送信します。モデルが完了した各 utterance は新しい文になります。partial result を継続的に監視し、現在の未確定文の最初の文字（または分割時に既に存在する後続テキスト）から `--modulate-partial-cutoff-seconds` を超えると、その後に現れる最初の全角または半角の句読点で現在の区間を確定します。文と文の間の無音時間は、次の文の待機時間には含まれません。URL のライブストリームでは、ライブエッジにいる間は通常ソースの速度で Modulate へ送信し、再接続時のリプレイデータまたはライブ入力キューに滞留がある間は、追いつくまで最大 1.5 倍速で送信します。予期しない通信切断時は指数バックオフで再接続し、成功後に直近の final 結果以降に受信した音声を最大 10 分間リプレイします。明示的な認証、クォータ、および API エラーは再試行しません。ローカルファイルでは、タイムアウト判定をメディアの時間軸に合わせるため、リアルタイム再生を使用してください：
 
 ```bash
-stream-translator-gpt {ファイルパス} --local-file-mode realtime --use-modulate-transcription-api --modulate-api-key {Modulate キー}
+stream-translator-gpt {ファイルパス} --pacer realtime --use-modulate-transcription-api --modulate-api-key {Modulate キー}
 ```
 
 **翻訳**（`--translation-prompt` を設定すると有効になり、記入した API キーに応じてプロバイダが選ばれます）：
@@ -185,7 +185,7 @@ stream-translator-gpt {ファイルパス} --local-file-mode realtime --use-modu
 | `--wait-for-video [秒]`            | 無効；値なしでは 60            | 予約配信が利用可能になるまで待機します。この値は yt-dlp の利用可能性チェック間の最小間隔で、開始時刻が既知ならその時刻まで直接待機する場合があります。未指定では待機せず、値なしでは 60 秒です。                         |
 | `--live-from-start`                | False                          | 対応するライブ配信を現在位置ではなく先頭からダウンロードするよう yt-dlp に要求します。この yt-dlp 機能は実験的で、対応する extractor でのみ利用できます。                                      |
 | `--stream-format-diagnostic-file PATH` | 無効                      | 選択したストリーム形式の許可リスト方式メタデータをユーザー指定パスへ書き込み、ストリームごとにそのファイルを置き換えます。明示指定時のみ有効で、未指定時に暗黙の診断ファイルは作成されません。          |
-| `--local-file-mode`                | offline                        | ローカルファイル再生モード。`offline` は可能な限り高速に処理し、`realtime` は実時間1秒ごとにデコード音声1秒分を出力します。                                                                                               |
+| `--pacer`                          | unlimited                      | URL ストリームとローカルファイルの入力ペーシング。`unlimited` は下流の処理能力に応じて可能な限り高速に読み込み、`realtime` は実時間1秒ごとにデコード音声1秒分を出力します。デバイス入力は元からリアルタイムなので、非デフォルト値は警告後に無視されます。 |
 | `--device-index`                   |                                | 録音するデバイスの番号。未設定の場合はシステムデフォルトの録音デバイスを使用。                                                                                                                                             |
 | `--list-devices`                   |                                | すべてのオーディオデバイス情報を表示して終了。                                                                                                                                                                             |
 | `--device-recording-interval`      | 0.5                            | 録音間隔が短いほど遅延は低くなりますが、CPU 使用率が上がります。0.1〜1.0 の間を推奨。                                                                                                                                      |

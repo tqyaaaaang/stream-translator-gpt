@@ -149,7 +149,7 @@ class RealtimeFilePacingTest(unittest.TestCase):
         self.assertEqual(pacer.samples_emitted, SAMPLES_PER_FRAME)
         np.testing.assert_array_equal(output.items[0][1], np.arange(SAMPLES_PER_FRAME, dtype=np.float32))
 
-    def test_offline_reader_keeps_legacy_short_block_discard_behavior(self):
+    def test_unlimited_reader_keeps_legacy_short_block_discard_behavior(self):
         full = np.ones(SAMPLES_PER_FRAME, dtype=np.float32)
         tail = np.ones(17, dtype=np.float32)
         process = mock.Mock(stdout=_SequenceReader([full.tobytes(), tail.tobytes(), b'']))
@@ -192,22 +192,42 @@ class RealtimeFilePacingTest(unittest.TestCase):
         self.assertEqual(output.items, [])
 
 
-class RealtimeFileConfigTest(unittest.TestCase):
+class PacerConfigTest(unittest.TestCase):
 
-    def test_cli_defaults_to_offline_and_accepts_realtime_mode(self):
-        offline = tyro.cli(Config, args=['clip.mp3'])
-        realtime = tyro.cli(Config, args=['clip.mp3', '--local-file-mode', 'realtime'])
+    def test_cli_defaults_to_unlimited_and_accepts_realtime(self):
+        unlimited = tyro.cli(Config, args=['clip.mp3'])
+        paced = tyro.cli(Config, args=['clip.mp3', '--pacer', 'realtime'])
 
-        self.assertEqual(offline.local_file_mode, 'offline')
-        self.assertEqual(realtime.local_file_mode, 'realtime')
+        self.assertEqual(unlimited.pacer, 'unlimited')
+        self.assertEqual(paced.pacer, 'realtime')
 
-    def test_factory_passes_selected_mode_to_local_file_getter(self):
+    def test_factory_passes_selected_pacer_to_local_file_getter(self):
+        for pacer, expected_realtime in (('unlimited', False), ('realtime', True)):
+            with self.subTest(pacer=pacer):
+                sentinel = object()
+                with mock.patch('stream_translator_gpt.main.LocalFileAudioGetter',
+                                return_value=sentinel) as getter_cls:
+                    result = _create_audio_getter(Config(url='clip.mp3', pacer=pacer))
+
+                self.assertIs(result, sentinel)
+                getter_cls.assert_called_once_with(file_path='clip.mp3', realtime=expected_realtime)
+
+    def test_device_warns_and_ignores_realtime_pacer(self):
         sentinel = object()
-        with mock.patch('stream_translator_gpt.main.LocalFileAudioGetter', return_value=sentinel) as getter_cls:
-            result = _create_audio_getter(Config(url='clip.mp3', local_file_mode='realtime'))
+        with mock.patch('stream_translator_gpt.main.DeviceAudioGetter', return_value=sentinel) as getter_cls, \
+                self.assertLogs('main', level='WARNING') as captured:
+            result = _create_audio_getter(Config(url='device', pacer='realtime'))
 
         self.assertIs(result, sentinel)
-        getter_cls.assert_called_once_with(file_path='clip.mp3', realtime=True)
+        self.assertNotIn('realtime', getter_cls.call_args.kwargs)
+        self.assertTrue(any('Ignoring --pacer realtime for device input' in message for message in captured.output))
+
+    def test_device_default_unlimited_pacer_does_not_warn(self):
+        with mock.patch('stream_translator_gpt.main.DeviceAudioGetter'), \
+                mock.patch('stream_translator_gpt.main.logger.warning') as warning:
+            _create_audio_getter(Config(url='device'))
+
+        warning.assert_not_called()
 
 
 class LocalFileProcessLifecycleTest(unittest.TestCase):

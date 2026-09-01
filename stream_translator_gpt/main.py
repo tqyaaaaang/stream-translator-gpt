@@ -109,9 +109,10 @@ class Config:
     live_from_start: Annotated[bool, tyro.conf.FlagCreatePairsOff] = False
     """Ask yt-dlp to download a supported livestream from its beginning instead of the current live edge."""
 
-    local_file_mode: Literal['offline', 'realtime'] = 'offline'
-    """Choose how local files are read. Offline mode processes as fast as possible; realtime mode emits one second
-    of decoded audio per second of wall-clock time."""
+    pacer: Literal['unlimited', 'realtime'] = 'unlimited'
+    """Control decoded audio pacing for URL streams and local files. Unlimited mode reads as fast as downstream
+    capacity permits; realtime emits one second of decoded audio per second of wall-clock time. Device input ignores this
+    option and logs a warning because capture is already paced by the audio device."""
 
     device_index: int | None = None
     """The index of the device that needs to be recorded. If not set, the system default recording device will be
@@ -336,7 +337,10 @@ class Config:
 
 
 def _create_audio_getter(config: Config):
+    realtime = config.pacer == 'realtime'
     if config.url.lower() == 'device':
+        if realtime:
+            logger.warning('Ignoring --pacer realtime for device input because audio capture is already real-time')
         logger.debug('Selected %s device audio input', config.device_audio_getter)
         if config.device_audio_getter == 'sounddevice':
             return SoundDeviceAudioGetter(device_index=config.device_index,
@@ -361,15 +365,13 @@ def _create_audio_getter(config: Config):
             format=config.format,
             cookies=config.cookies,
             proxy=config.input_proxy,
-            # The Modulate sender applies one continuous rate limit across
-            # fragment bursts, reconnect replay, and queued live audio.
-            realtime=False,
+            realtime=realtime,
             wait_for_video=config.wait_for_video,
             live_from_start=config.live_from_start,
             stream_format_diagnostic_file=config.stream_format_diagnostic_file,
         )
-    logger.debug('Selected local file audio input in %s mode', config.local_file_mode)
-    return LocalFileAudioGetter(file_path=config.url, realtime=config.local_file_mode == 'realtime')
+    logger.debug('Selected local file audio input with %s pacing', config.pacer)
+    return LocalFileAudioGetter(file_path=config.url, realtime=realtime)
 
 
 def _transcription_engine_label(config: Config) -> str:
@@ -853,8 +855,8 @@ def _validate_and_normalize(config: Config):
                 or config.modulate_reconnect_backoff_seconds < 0):
             logger.error('Modulate reconnect backoff seconds must be a finite value of zero or greater')
             sys.exit(1)
-        if config.url.lower() != 'device' and not is_url(config.url) and config.local_file_mode != 'realtime':
-            logger.warning('Modulate local-file transcription works best with --local-file-mode realtime so partial '
+        if config.url.lower() != 'device' and not is_url(config.url) and config.pacer != 'realtime':
+            logger.warning('Modulate local-file transcription works best with --pacer realtime so partial '
                            'cutoff timing follows the media timeline')
 
     if config.translation_prompt and not (config.openai_api_key or config.google_api_key):

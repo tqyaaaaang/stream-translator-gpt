@@ -133,7 +133,7 @@ stream-translator-gpt URL [OPTIONS]
 Modulate 后端不使用 Silero VAD，而是把 16 kHz 音频直接发送给模型的流式模式；模型完成的每个 utterance 都会成为一个新句子。程序会持续监控 partial result：从当前未提交句子的第一个字（或切断时已存在的后续文字）开始计时，超过 `--modulate-partial-cutoff-seconds` 后，会在随后出现的第一个全角或半角标点处提交当前分段；句子之间的静音不会占用下一句的等待时间。对于 URL 直播流，Modulate 在直播边缘通常按音源速率发送；只要重连重放数据或实时输入队列中仍有积压，就会以最高 1.5 倍音源速率发送来追赶进度。发生意外传输中断时，程序会按指数退避重连；重连成功后，会重放上一个 final 结果之后收到的、最多 10 分钟音频。显式认证、额度和 API 错误不会重试。处理本地文件时，请使用实时播放，让超时判断与媒体时间一致：
 
 ```bash
-stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-transcription-api --modulate-api-key {你的 Modulate key}
+stream-translator-gpt {文件路径} --pacer realtime --use-modulate-transcription-api --modulate-api-key {你的 Modulate key}
 ```
 
 **翻译**（设置 `--translation-prompt` 即启用；根据填写的 API key 自动选择服务商）：
@@ -185,7 +185,7 @@ stream-translator-gpt {文件路径} --local-file-mode realtime --use-modulate-t
 | `--wait-for-video [秒数]`          | 默认关闭；裸参数为 60          | 等待计划直播开始。该值是 yt-dlp 两次可用性检查之间的最短间隔；如果开播时间已知，yt-dlp 可能直接等待到该时间。不传时关闭等待，裸参数使用 60 秒。                               |
 | `--live-from-start`                | False                          | 请求 yt-dlp 从受支持直播的开头开始下载，而不是从当前直播位置开始。该 yt-dlp 功能仍属实验性功能，且仅适用于实现了它的提取器。                                               |
 | `--stream-format-diagnostic-file PATH` | 默认关闭                  | 让 yt-dlp 将所选流格式的白名单元数据写入用户指定路径，并在每条流开始时替换该文件。仅显式传入时启用；未指定时绝不会创建隐式诊断文件。                                      |
-| `--local-file-mode`                | offline                        | 本地文件播放模式：`offline` 会尽快处理，`realtime` 按墙钟时间每秒输出一秒解码音频。                                                                                          |
+| `--pacer`                          | unlimited                      | URL 流和本地文件的输入速率限制：`unlimited` 按下游处理能力尽快读取，`realtime` 按墙钟时间每秒输出一秒解码音频。设备输入本身已是实时采集，指定非默认值时会警告并忽略。                                                |
 | `--device-index`                   |                                | 需要录制的设备编号。不设置时使用系统默认录音设备。                                                                                                                            |
 | `--list-devices`                   |                                | 打印所有音频设备信息后退出。                                                                                                                                                  |
 | `--device-recording-interval`      | 0.5                            | 录制间隔越短延迟越低，但会增加 CPU 占用。建议设置在 0.1 到 1.0 之间。                                                                                                         |

@@ -9,7 +9,7 @@ from stream_translator_gpt.main import Config, _create_audio_getter
 
 class StreamRealtimeConfigTest(unittest.TestCase):
 
-    def test_modulate_url_leaves_getter_unpaced_for_transcriber_level_rate_limit(self):
+    def test_modulate_url_defaults_to_unlimited_getter_pacing(self):
         sentinel = object()
         config = Config(url='https://example.test/live',
                         use_modulate_transcription_api=True,
@@ -44,6 +44,23 @@ class StreamRealtimeConfigTest(unittest.TestCase):
                                           wait_for_video=None,
                                           live_from_start=False,
                                           stream_format_diagnostic_file=None)
+
+    def test_realtime_pacer_is_forwarded_to_stream_getter(self):
+        sentinel = object()
+        config = Config(url='https://example.test/live', pacer='realtime')
+
+        with mock.patch('stream_translator_gpt.main.StreamAudioGetter', return_value=sentinel) as getter_cls:
+            result = _create_audio_getter(config)
+
+        self.assertIs(result, sentinel)
+        getter_cls.assert_called_once_with(url=config.url,
+                                           format=config.format,
+                                           cookies=config.cookies,
+                                           proxy=config.input_proxy,
+                                           realtime=True,
+                                           wait_for_video=None,
+                                           live_from_start=False,
+                                           stream_format_diagnostic_file=None)
 
 
 class StreamRealtimeLoopTest(unittest.TestCase):

@@ -632,8 +632,8 @@ class LocalFileAudioGetter(LoopWorkerBase):
 
     def loop(self, output_queue: queue.SimpleQueue[np.array]):
         self.started.set()
-        mode = 'realtime' if self.realtime else 'offline'
-        logger.warning('Opening local file in %s mode: %s', mode, self.file_path)
+        pacing = 'realtime' if self.realtime else 'unlimited'
+        logger.warning('Opening local file with %s pacing: %s', pacing, self.file_path)
         failed = False
         try:
             try:
