@@ -213,13 +213,47 @@ class WaitForVideoWiringTest(unittest.TestCase):
             )
             with open(diagnostic_file, encoding='utf-8') as reset_file:
                 self.assertEqual(reset_file.read(), '')
-        command = popen_call.args[0]
+            command = popen_call.args[0]
 
-        diagnostic_index = command.index('--print-to-file')
-        diagnostic_template = command[diagnostic_index + 1]
-        self.assertTrue(diagnostic_template.startswith('before_dl:format_id='))
-        self.assertNotIn('%(url)', diagnostic_template)
-        self.assertEqual(command[diagnostic_index + 2], os.path.abspath(diagnostic_file))
+            diagnostic_index = command.index('--print-to-file')
+            diagnostic_template = command[diagnostic_index + 1]
+            self.assertTrue(diagnostic_template.startswith('before_dl:format_id='))
+            self.assertNotIn('%(url)', diagnostic_template)
+            # The launcher resolves symlinks as well as making the path
+            # absolute (e.g. macOS /var -> /private/var).
+            self.assertEqual(command[diagnostic_index + 2], os.path.realpath(diagnostic_file))
+            self.assertTrue(os.path.samefile(command[diagnostic_index + 2], diagnostic_file))
+
+    def test_format_diagnostic_file_normalizes_parent_components_and_native_symlinks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diagnostic_dir = os.path.join(temp_dir, 'diagnostic outputs')
+            nested_dir = os.path.join(diagnostic_dir, 'nested')
+            os.makedirs(nested_dir)
+            diagnostic_file = os.path.join(diagnostic_dir, 'selected-format.txt')
+            paths = [os.path.join(nested_dir, '..', 'selected-format.txt')]
+            if os.name == 'posix':
+                # POSIX supports directory symlinks without the extra
+                # privileges/developer mode that Windows may require.
+                linked_dir = os.path.join(temp_dir, 'diagnostic link')
+                os.symlink(diagnostic_dir, linked_dir, target_is_directory=True)
+                paths.append(os.path.join(linked_dir, 'selected-format.txt'))
+
+            for supplied_path in paths:
+                with self.subTest(path=supplied_path):
+                    with open(diagnostic_file, 'w', encoding='utf-8') as existing_file:
+                        existing_file.write('stale format metadata')
+                    popen_call = self._open_and_get_popen(
+                        None,
+                        stream_format_diagnostic_file=supplied_path,
+                    )
+                    command = popen_call.args[0]
+                    actual_path = command[command.index('--print-to-file') + 2]
+
+                    self.assertTrue(os.path.isabs(actual_path))
+                    self.assertEqual(actual_path, os.path.realpath(diagnostic_file))
+                    self.assertTrue(os.path.samefile(actual_path, supplied_path))
+                    with open(diagnostic_file, encoding='utf-8') as reset_file:
+                        self.assertEqual(reset_file.read(), '')
 
     def test_sigterm_uses_a_nonzero_exit_status(self):
         getter = StreamAudioGetter(

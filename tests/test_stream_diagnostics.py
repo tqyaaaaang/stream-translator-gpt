@@ -1,5 +1,7 @@
 import io
+import os
 import queue
+import signal
 import subprocess
 import tempfile
 import threading
@@ -201,6 +203,16 @@ class StreamDiagnosticsTest(unittest.TestCase):
         killpg.assert_called_once_with(1234, 9)
         process.kill.assert_not_called()
 
+    def test_windows_process_tree_kill_uses_parent_process(self):
+        process = mock.Mock(pid=1234)
+
+        with mock.patch('stream_translator_gpt.audio_getter.os.name', 'nt'), \
+                mock.patch('stream_translator_gpt.audio_getter.os.killpg', create=True) as killpg:
+            _kill_process(process, 'yt-dlp', process_tree=True)
+
+        process.kill.assert_called_once_with()
+        killpg.assert_not_called()
+
     def test_stream_ffmpeg_uses_error_logging_without_a_stderr_pipe(self):
         ytdlp = mock.Mock(pid=11)
         ffmpeg_process = mock.Mock(pid=12)
@@ -355,10 +367,9 @@ class StreamDiagnosticsTest(unittest.TestCase):
 
     def test_external_stop_kills_reaps_and_joins_stream_children(self):
         getter = StreamAudioGetter('https://example.test/live', 'ba', '', '')
-        ffmpeg_process = mock.Mock()
-        ytdlp_process = mock.Mock()
+        ffmpeg_process = mock.Mock(pid=1233)
+        ytdlp_process = mock.Mock(pid=1234)
         ffmpeg_process.poll.side_effect = lambda: -9 if ffmpeg_process.kill.called else None
-        ytdlp_process.poll.side_effect = lambda: -9 if ytdlp_process.kill.called else None
         ffmpeg_process.wait.return_value = -9
         ytdlp_process.wait.return_value = -9
         transport_running = [True]
@@ -367,12 +378,16 @@ class StreamDiagnosticsTest(unittest.TestCase):
         transport_thread.join.side_effect = lambda timeout: transport_running.__setitem__(0, False)
         stats = _StreamTransportStats(started_at=10.0)
         read_started = threading.Event()
+        stop_completed = threading.Event()
         output_queue = queue.Queue(maxsize=1)
         output_queue.put('buffered-audio')
 
         def wait_until_stopped(*_args, **_kwargs):
             read_started.set()
             self.assertTrue(getter.stop_event.wait(timeout=1))
+            # stop_event is set before stop() signals the children. Let that
+            # finish before cleanup so the mock process state is deterministic.
+            self.assertTrue(stop_completed.wait(timeout=2))
             return 0
 
         errors = []
@@ -385,19 +400,42 @@ class StreamDiagnosticsTest(unittest.TestCase):
 
         with mock.patch('stream_translator_gpt.audio_getter._open_stream',
                         return_value=(ffmpeg_process, ytdlp_process, transport_thread, stats)), \
-                mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', side_effect=wait_until_stopped):
+                mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', side_effect=wait_until_stopped), \
+                mock.patch('stream_translator_gpt.audio_getter.os.killpg', create=True) as killpg:
+            # Always mock the OS call: these are fake PIDs, never real children.
+            ytdlp_process.poll.side_effect = lambda: (
+                -9 if ytdlp_process.kill.called or killpg.called else None)
             worker = threading.Thread(target=run_getter)
             worker.start()
-            self.assertTrue(read_started.wait(timeout=1))
-            getter.stop()
-            getter.stop()
-            worker.join(timeout=2)
+            try:
+                self.assertTrue(read_started.wait(timeout=1))
+                getter.stop()
+                stop_calls = (list(ffmpeg_process.kill.mock_calls),
+                              list(ytdlp_process.kill.mock_calls), list(killpg.mock_calls))
+                getter.stop()
+                self.assertEqual((ffmpeg_process.kill.mock_calls,
+                                  ytdlp_process.kill.mock_calls, killpg.mock_calls), stop_calls)
+            finally:
+                getter.stop()
+                stop_completed.set()
+                worker.join(timeout=2)
 
         self.assertFalse(worker.is_alive())
         self.assertEqual(errors, [])
         self.assertTrue(getter.stop_event.is_set())
+        self.assertTrue(getter.finished.is_set())
         ffmpeg_process.kill.assert_called_once_with()
-        ytdlp_process.kill.assert_called_once_with()
+        if os.name == 'nt':
+            ytdlp_process.kill.assert_called_once_with()
+            killpg.assert_not_called()
+        else:
+            # macOS/Linux also clean up the private group after the parent
+            # exits, since an HLS child may still hold the stream pipe open.
+            self.assertEqual(killpg.call_args_list, [
+                mock.call(ytdlp_process.pid, signal.SIGKILL),
+                mock.call(ytdlp_process.pid, signal.SIGKILL),
+            ])
+            ytdlp_process.kill.assert_not_called()
         ffmpeg_process.wait.assert_called_once_with(timeout=5)
         ytdlp_process.wait.assert_called_once_with(timeout=5)
         transport_thread.join.assert_called_once_with(timeout=5)
