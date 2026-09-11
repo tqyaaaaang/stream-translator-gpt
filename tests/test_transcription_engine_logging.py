@@ -18,56 +18,50 @@ class TranscriptionEngineLoggingTest(unittest.TestCase):
             ({'use_hf_asr': True}, 'Hugging Face ASR'),
             ({'use_modulate_transcription_api': True}, 'Modulate'),
         ]
-
         for options, expected in cases:
             with self.subTest(options=options):
                 self.assertEqual(_transcription_engine_label(Config(url='input', **options)), expected)
 
     def test_transcription_engine_is_logged_before_translation_engine(self):
-        config = Config(url='input',
-                        use_modulate_transcription_api=True,
-                        modulate_api_key='modulate-key',
-                        translation_prompt='translate')
-        fake_getter = SimpleNamespace(loop=mock.Mock())
-        fake_transcriber = SimpleNamespace(loop=mock.Mock())
-        fake_translator = SimpleNamespace(loop=mock.Mock())
-        fake_exporter = SimpleNamespace(loop=mock.Mock())
-        worker_thread = mock.Mock()
-        worker_thread.is_alive.return_value = False
-        messages = []
+        # Construct the real selected implementation, but never start its workers
+        # or create SDK clients. This catches logging changes in either factory.
+        for legacy in (False, True):
+            for google_key in (None, 'google-test-key'):
+                with self.subTest(legacy=legacy, google=bool(google_key)):
+                    config = Config(url='input', use_modulate_transcription_api=True,
+                                    modulate_api_key='modulate-test-key', openai_api_key='openai-test-key',
+                                    google_api_key=google_key, use_old_translator=legacy,
+                                    translation_prompt='Translate.')
+                    worker_thread = mock.Mock()
+                    worker_thread.is_alive.return_value = False
+                    messages = []
 
-        def record_warning(message, *args):
-            messages.append(message % args if args else message)
+                    def record_warning(message, *args):
+                        messages.append(message % args if args else message)
 
-        def make_translator(**kwargs):
-            main.logger.warning('Using %s API as translation engine.', kwargs['model'])
-            return fake_translator
+                    with mock.patch.object(main, 'ClientPool'), \
+                            mock.patch.object(main, '_create_audio_getter',
+                                              return_value=SimpleNamespace(loop=mock.Mock())), \
+                            mock.patch.object(main, 'ModulateStreamingTranscriber'), \
+                            mock.patch.object(main, 'ResultExporter'), \
+                            mock.patch.object(main, 'start_daemon_thread', return_value=worker_thread), \
+                            mock.patch.object(main.logger, 'warning', side_effect=record_warning):
+                        main.run(config)
 
-        with mock.patch.object(main, 'ClientPool'), \
-                mock.patch.object(main, '_create_audio_getter', return_value=fake_getter), \
-                mock.patch.object(main, 'ModulateStreamingTranscriber', return_value=fake_transcriber), \
-                mock.patch.object(main, 'GPTTranslator', side_effect=make_translator), \
-                mock.patch.object(main, 'ResultExporter', return_value=fake_exporter), \
-                mock.patch.object(main, 'start_daemon_thread', return_value=worker_thread), \
-                mock.patch.object(main.logger, 'warning', side_effect=record_warning):
-            main.run(config)
-
-        transcription_message = 'Using Modulate as transcription engine.'
-        translation_message = f'Using {config.gpt_model} API as translation engine.'
-        self.assertEqual(messages.count(transcription_message), 1)
-        self.assertEqual(messages.count(translation_message), 1)
-        self.assertLess(messages.index(transcription_message), messages.index(translation_message))
+                    transcription_message = 'Using Modulate as transcription engine.'
+                    model = config.gemini_model if google_key else config.gpt_model
+                    translation_message = f'Using {model} API as translation engine.'
+                    self.assertEqual(messages.count(transcription_message), 1)
+                    self.assertEqual(messages.count(translation_message), 1)
+                    self.assertLess(messages.index(transcription_message), messages.index(translation_message))
+                    self.assertEqual(sum('--use-old-translator is deprecated' in text for text in messages),
+                                     int(legacy))
 
     def test_transcription_engine_is_logged_without_translation(self):
         for translation_prompt in (None, ''):
             with self.subTest(translation_prompt=translation_prompt):
-                config = Config(url='input',
-                                use_modulate_transcription_api=True,
-                                modulate_api_key='modulate-key',
-                                translation_prompt=translation_prompt)
-                fake_getter = SimpleNamespace(loop=mock.Mock())
-                fake_transcriber = SimpleNamespace(loop=mock.Mock())
-                fake_exporter = SimpleNamespace(loop=mock.Mock())
+                config = Config(url='input', use_modulate_transcription_api=True,
+                                modulate_api_key='modulate-key', translation_prompt=translation_prompt)
                 worker_thread = mock.Mock()
                 worker_thread.is_alive.return_value = False
                 messages = []
@@ -76,19 +70,19 @@ class TranscriptionEngineLoggingTest(unittest.TestCase):
                     messages.append(message % args if args else message)
 
                 with mock.patch.object(main, 'ClientPool'), \
-                        mock.patch.object(main, '_create_audio_getter', return_value=fake_getter), \
-                        mock.patch.object(main, 'ModulateStreamingTranscriber', return_value=fake_transcriber), \
-                        mock.patch.object(main, 'GPTTranslator') as gpt_translator, \
-                        mock.patch.object(main, 'GeminiTranslator') as gemini_translator, \
-                        mock.patch.object(main, 'ResultExporter', return_value=fake_exporter), \
-                        mock.patch.object(main, 'start_daemon_thread', return_value=worker_thread), \
+                        mock.patch.object(main, '_create_audio_getter',
+                                          return_value=SimpleNamespace(loop=mock.Mock())), \
+                        mock.patch.object(main, 'ModulateStreamingTranscriber'), \
+                        mock.patch.object(main, '_create_translator', wraps=main._create_translator) as factory, \
+                        mock.patch.object(main, 'ResultExporter'), \
+                        mock.patch.object(main, 'start_daemon_thread', return_value=worker_thread) as start, \
                         mock.patch.object(main.logger, 'warning', side_effect=record_warning):
                     main.run(config)
 
                 self.assertEqual(messages.count('Using Modulate as transcription engine.'), 1)
                 self.assertFalse(any(message.endswith('as translation engine.') for message in messages))
-                gpt_translator.assert_not_called()
-                gemini_translator.assert_not_called()
+                factory.assert_called_once_with(config)
+                self.assertFalse(any(call.kwargs['name'] == 'translator' for call in start.call_args_list))
 
 
 if __name__ == '__main__':

@@ -158,6 +158,18 @@ stream-translator-gpt {ファイルパス} --pacer realtime --use-modulate-trans
 - **Cqhttp**: ```stream-translator-gpt {URL} --language {入力言語} --cqhttp-url {Cqhttp URL} --cqhttp-token {Cqhttp トークン}```
 - **タイムスタンプ付きテキストファイル**: ```stream-translator-gpt {URL} --language {入力言語} --translation-prompt "{入力言語}から{出力言語}に翻訳" --google-api-key {Google キー} --no-show-transcribe-result --retry-if-translation-fails --output-file-path ./result.txt --output-file-timestamps```
 
+### 翻訳モジュールの責務
+
+デフォルト実装は、ライフサイクル（`translation_pipeline.py`）、スケジューリングと順序付き出力
+（`translation_scheduler.py`）、ワーカーループ（`translation_worker.py`）、API 呼び出し
+（`translation_backends.py`）、ワーカー専用クライアント（`translation_clients.py`）、プロンプトと結果解析
+（`translation_protocol.py`）を分離しています。`translation_types.py` の不変リクエスト・結果で通信し、
+パイプラインタスクを更新するのはスケジューラだけです。ワーカーは context や出力順、再試行の待機を行いません。
+
+`--use-old-translator` は `ab314cf` の実装を無変更で保存した `legacy_translator.py` を直接使用し、
+新しい翻訳モジュールを読み込みません。従来のクライアントプール、再試行、タイムアウト、終了時の制約も維持します。
+context モードは逐次処理、それ以外は最大 10 リクエストです。`--translation-threads` は新実装だけに適用されます。
+
 ## すべてのオプション
 
 > [!NOTE]
@@ -226,11 +238,13 @@ stream-translator-gpt {ファイルパス} --pacer realtime --use-modulate-trans
 | `--openai-translation-api`         | auto                           | OpenAI 翻訳 API モード：auto / responses / chat-completions。`auto` は OpenAI 公式エンドポイントでは Responses、`--openai-base-url` 設定時は Chat Completions を使用します。`/v1/responses` を実装するカスタムエンドポイントでは `responses` を明示指定してください。 |
 | `--gemini-model`                   | gemini-3.5-flash-lite          | Google の Gemini モデル名。gemini-3-flash-preview / gemini-3.1-flash-lite / gemini-3.5-flash / gemini-3.5-flash-lite / gemini-3.6-flash                                                                                    |
 | `--translation-prompt`             |                                | 設定すると、GPT / Gemini API で結果テキストをターゲット言語に翻訳します（記入した API キーに応じて選択）。例：「日本語から中国語に翻訳」。プロンプトに背景情報（配信者が誰か、何の配信か）を加えると翻訳品質が向上します。出力形式はプログラム内部で制御されるため、このプロンプトには翻訳内容、用語、背景、スタイルのみを指定してください。 |
-| `--translation-history-size`       | 3                              | LLM API 呼び出し時に `Reference` として送信する過去の生の文字起こしの数。性能の低いモデルでは文字起こし履歴を 0 にすることを推奨。                                                                                         |
-| `--use-translation-context`        |                                | ローリング翻訳コンテキストモードを有効化。内部では前回生成した `Context`、直近の生の文字起こし `Reference`、現在の `Translate` をモデルへ渡し、100 Unicode文字以内の Context を更新します。Context は直近の Reference を言い換えるのではなく、その範囲を越えて役立つ話題、活動、登場主体、未解決の状態を保持します。リクエストは順番に処理され、ローリング Context 自体は出力されません。既存の任意の原文・タイムスタンプ出力は変わりません。 |
-| `--translation-timeout`            | 10                             | GPT / Gemini の翻訳がこの秒数を超えた場合、その翻訳は破棄されます。                                                                                                                                                        |
+| `--translation-history-size`       | 3                              | 各リクエストの `Reference` に含める直前の生の文字起こしの数（0 以上）。ローリングコンテキスト有効時に 0 を指定すると、通常は逐次処理になります。 |
+| `--translation-threads`            | 3                              | 翻訳リクエストの最大同時実行数（1 以上）。空いているスレッドへ動的に割り当て、出力は原文順を維持します。コンテキスト有効時に Reference の窓幅 + 1 を超えると警告しますが、設定は有効です。 |
+| `--use-old-translator`             |                                | 緊急時に無変更で保存された旧翻訳実装へ戻し、非推奨警告を出します。旧実装は `--translation-threads` を無視し、コンテキスト有効時には逐次処理します。 |
+| `--use-translation-context`        |                                | 長期的な話題・活動・登場主体・未解決の状態を 100 Unicode 文字以内の内部要約として保持します。並列リクエストは原文順で最新の利用可能な `Context` と直近の生の `Reference` を使います。Reference が欠落区間を覆えなければ待機し、処理中または再試行待ちのタスクでも補えない場合は最新の Context で続行して INFO を記録します。Context 自体は出力されません。 |
+| `--translation-timeout`            | 10                             | 各文の最初の実行開始からの総制限時間（秒）。再試行と待機を含み、期限切れの結果は破棄します。0 は総期限を無効にしますが、個々のネットワーク呼び出しにはタイムアウトがあります。 |
 | `--use-json-result`                |                                | LLM 翻訳で JSON 結果を使用。一部のローカルデプロイモデル向け。                                                                                                                                                             |
-| `--retry-if-translation-fails`     |                                | 翻訳のタイムアウト/失敗時にリトライ。オフラインでの字幕生成に使用。                                                                                                                                                        |
+| `--retry-if-translation-fails`     |                                | 元の Reference/Context を保持し、総期限内で失敗したリクエストを再試行します。`--translation-timeout 0` と併用すると、停止するまで再試行し続ける場合があります。 |
 | `--temperature`                    |                                | GPT/Gemini パラメータ。出力のランダム性を制御し、高いほど多様な結果になります。                                                                                                                                            |
 | `--top-p`                          |                                | GPT/Gemini パラメータ。Nucleus サンプリングのしきい値。累積確率がこの値を超えるトークンのみが考慮されます。                                                                                                                |
 | `--top-k`                          |                                | Gemini パラメータ。トークン選択を確率上位 K 個の候補に制限します。                                                                                                                                                         |

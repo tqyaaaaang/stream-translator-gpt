@@ -11,7 +11,7 @@ import numpy as np
 import tyro
 
 from stream_translator_gpt.common import ClientPool, TranslationTask
-from stream_translator_gpt.llm_translator import (
+from stream_translator_gpt.legacy_translator import (
     GeminiTranslator,
     GPTTranslator,
     LLMTranslator,
@@ -304,7 +304,7 @@ class TranslationContextTest(unittest.TestCase):
         def publish():
             accepted.append(translator._apply_completion(task, 'response'))
 
-        with mock.patch('stream_translator_gpt.llm_translator._parse_translation_context_completion',
+        with mock.patch('stream_translator_gpt.legacy_translator._parse_translation_context_completion',
                         side_effect=blocked_parse):
             worker = threading.Thread(target=publish)
             worker.start()

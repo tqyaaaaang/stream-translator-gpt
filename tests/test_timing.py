@@ -57,7 +57,7 @@ class TimingTest(unittest.TestCase):
         timer.set_log.assert_called_once_with('VAD evaluated block %d with speech probability %.4f', 1, 0.9)
 
     def test_translation_wrapper_logs_task_id(self):
-        from stream_translator_gpt.llm_translator import LLMTranslator
+        from stream_translator_gpt.legacy_translator import LLMTranslator
 
         class FakeTranslator(LLMTranslator):
 
@@ -69,7 +69,7 @@ class TimingTest(unittest.TestCase):
         timer = mock.MagicMock()
         timer.__enter__.return_value = timer
 
-        with mock.patch('stream_translator_gpt.llm_translator.LogTime', return_value=timer) as log_time:
+        with mock.patch('stream_translator_gpt.legacy_translator.LogTime', return_value=timer) as log_time:
             translator._translate_with_timing(task)
 
         log_time.assert_called_once_with('Translated task %d', 9)

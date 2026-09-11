@@ -158,6 +158,18 @@ stream-translator-gpt {文件路径} --pacer realtime --use-modulate-transcripti
 - **Cqhttp**: ```stream-translator-gpt {网址} --language {输入语言} --cqhttp-url {你的 Cqhttp 地址} --cqhttp-token {你的 Cqhttp 令牌}```
 - **带时间戳的文本文件**：```stream-translator-gpt {网址} --language {输入语言} --translation-prompt "把{输入语言}翻译成{输出语言}" --google-api-key {你的 Google key} --no-show-transcribe-result --retry-if-translation-fails --output-file-path ./result.txt --output-file-timestamps```
 
+### 翻译模块职责
+
+默认翻译实现将流水线生命周期（`translation_pipeline.py`）、调度与有序发布（`translation_scheduler.py`）、
+请求工作线程循环（`translation_worker.py`）、供应商 API 调用（`translation_backends.py`）、线程独占的 client
+（`translation_clients.py`）以及 prompt 构造与结果解析（`translation_protocol.py`）分别实现。
+模块间通过 `translation_types.py` 定义的不可变请求和结果通信；只有调度器会修改流水线任务。
+工作线程不会等待 context、输出顺序或重试退避。
+
+`--use-old-translator` 选择 `legacy_translator.py` 中从 `ab314cf` 原封不动保留的完整历史实现，
+不导入或调用新翻译模块。其原有 client pool、重试、超时与退出方面的限制也保持不变：
+context 模式串行，否则最多 10 个并发请求。`--translation-threads` 只影响新实现。
+
 ## 所有选项
 
 > [!NOTE]
@@ -226,11 +238,13 @@ stream-translator-gpt {文件路径} --pacer realtime --use-modulate-transcripti
 | `--openai-translation-api`         | auto                           | OpenAI 翻译 API 模式：auto / responses / chat-completions。`auto` 对 OpenAI 官方端点使用 Responses；设置 `--openai-base-url` 时使用 Chat Completions。若自定义端点实现了 `/v1/responses`，请显式选择 `responses`。 |
 | `--gemini-model`                   | gemini-3.5-flash-lite          | Google 的 Gemini 模型名，gemini-3-flash-preview / gemini-3.1-flash-lite / gemini-3.5-flash / gemini-3.5-flash-lite / gemini-3.6-flash                                         |
 | `--translation-prompt`             |                                | 设置后，将通过 GPT / Gemini API 把结果文本翻译为目标语言（根据填写的 API key 自动选择）。示例："将日语翻译为中文"。在 prompt 中补充背景（主播是谁、直播内容）可提升翻译质量。输出格式由程序内部控制；该 prompt 只需描述翻译内容、术语、背景与风格。 |
-| `--translation-history-size`       | 3                              | 调用 LLM API 时在 `Reference` 字段中发送的原始历史转录条数。对较弱的模型建议禁用转录历史（设为 0）。                                                                          |
-| `--use-translation-context`        |                                | 启用滚动翻译 context 模式。模型内部会收到上一次生成的 `Context`、近期原始转录 `Reference` 和当前文本 `Translate`，并更新不超过 100 个 Unicode 字符的新 Context。Context 应跨越近期 Reference 窗口，保留更高层的主题、活动、实体和未解决状态，而不是复述最近几句。请求会按顺序处理，滚动 Context 本身永不导出；现有可选原文和时间戳输出保持不变。 |
-| `--translation-timeout`            | 10                             | GPT / Gemini 翻译超过此秒数时，该条翻译将被丢弃。                                                                                                                             |
+| `--translation-history-size`       | 3                              | 每次请求的 `Reference` 包含的前文原始转录条数，必须大于等于 0。启用滚动 context 时，设为 0 通常会使请求串行执行。 |
+| `--translation-threads`            | 3                              | 最大并发翻译请求数，必须至少为 1。请求动态分配给空闲线程，结果仍按原文顺序输出。启用滚动 context 且线程数大于 Reference 窗口 + 1 时给出 warning，但仍按配置运行。 |
+| `--use-old-translator`             |                                | 应急回退到原封不动保留的完整历史翻译实现，并输出弃用 warning。旧实现忽略 `--translation-threads`，启用滚动 context 时仍串行执行。 |
+| `--use-translation-context`        |                                | 维护不超过 100 个 Unicode 字符的内部摘要，保留较长期的主题、活动、实体和未解决状态。并发请求采用原时间顺序最新的可用 `Context` 和近期原始转录 `Reference`。Reference 无法覆盖缺口时等待；若已无在途或待重试任务能补足缺口，使用最新可用 context 继续，仅记录 INFO。Context 本身永不导出。 |
+| `--translation-timeout`            | 10                             | 从该句首次派发开始的总时间限制（秒），包含重试和退避等待，过期结果会被丢弃。0 禁用总时间限制，但单次网络调用仍有超时。 |
 | `--use-json-result`                |                                | 在 LLM 翻译中使用 JSON 结果，适用于某些本地部署的模型。                                                                                                                       |
-| `--retry-if-translation-fails`     |                                | 翻译超时/失败时重试。用于离线生成字幕。                                                                                                                                       |
+| `--retry-if-translation-fails`     |                                | 在翻译总时间限制内重试失败请求，保持原 Reference/context 快照。搭配 `--translation-timeout 0` 时可能持续重试，直到手动停止。 |
 | `--temperature`                    |                                | GPT/Gemini 参数。控制输出随机性，值越高结果越多样。                                                                                                                           |
 | `--top-p`                          |                                | GPT/Gemini 参数。核采样阈值，只考虑累计概率超过此值的 token。                                                                                                                 |
 | `--top-k`                          |                                | Gemini 参数。将 token 选择限制在概率最高的 K 个候选之内。                                                                                                                     |

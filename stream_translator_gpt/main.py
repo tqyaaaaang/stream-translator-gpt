@@ -24,7 +24,6 @@ from .audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAu
 from .audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
 from .modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_STREAM_MAX_SEND_RATE,
                                    ModulateStreamingTranscriber)
-from .llm_translator import GPTTranslator, GeminiTranslator, _gpt_model_version
 from .result_exporter import ResultExporter
 from .logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
 from . import __version__
@@ -248,22 +247,32 @@ class Config:
     formatting is controlled internally; use this prompt for translation content, terminology, background and style."""
 
     translation_history_size: int = 3
-    """The number of previous transcripts sent as context when calling the LLM API. It is recommended to disable
-    context (set to 0) for weaker models."""
+    """Number of preceding raw transcripts included in each request's Reference. Must be zero or greater. With
+    rolling context enabled, a zero-sized Reference normally serializes requests."""
+
+    translation_threads: int = 3
+    """Maximum concurrent translation requests in the new scheduler. Must be at least 1. Results are exported in
+    source order. Ignored by --use-old-translator."""
+
+    use_old_translator: Annotated[bool, tyro.conf.FlagCreatePairsOff] = False
+    """Use the unchanged historical translator as an emergency fallback. Its rolling-context mode is sequential;
+    --translation-threads does not change the legacy implementation."""
 
     use_translation_context: bool = False
-    """Maintain an internal rolling LLM-generated summary. When enabled, translation requests are processed
-    sequentially so every request can use the preceding request's context; the rolling context itself is not
-    exported."""
+    """Maintain an internal rolling LLM-generated summary. Concurrent requests use the latest available context in
+    source order and wait when the Reference cannot bridge its gap. If failures make the gap impossible to bridge,
+    translation continues with the latest available context and logs INFO. The context itself is never exported."""
 
     translation_timeout: int = 10
-    """If the GPT / Gemini translation exceeds this number of seconds, the translation will be discarded."""
+    """Total seconds allowed for a translation after its first dispatch, including retries and retry backoff.
+    Expired results are discarded. Zero disables this deadline; individual network calls still have timeouts."""
 
     use_json_result: bool = False
     """Using JSON result in LLM translation for some locally deployed models."""
 
     retry_if_translation_fails: bool = False
-    """Retry when translation times out/fails. Used to generate subtitles offline."""
+    """Retry failed translation requests within --translation-timeout, preserving their original Reference and
+    context. With a timeout of 0, retries may continue until stopped. Useful for generating subtitles offline."""
 
     temperature: float | None = None
     """GPT/Gemini parameter. Controls output randomness, higher values produce more diverse results."""
@@ -389,15 +398,90 @@ def _transcription_engine_label(config: Config) -> str:
     return 'Whisper'
 
 
+def _create_translator(config: Config):
+    """Select one complete implementation; legacy never imports the new translation stack."""
+    if not config.translation_prompt:
+        return None
+
+    provider_options = ({
+        'model': config.gemini_model,
+        'temperature': config.temperature,
+        'top_p': config.top_p,
+        'top_k': config.top_k,
+    } if config.google_api_key else {
+        'model': config.gpt_model,
+        'prompt_cache_key': config.prompt_cache_key,
+        'prompt_cache_enabled': config.openai_prompt_cache,
+        'api_mode': config.openai_translation_api,
+        'temperature': config.temperature,
+        'top_p': config.top_p,
+        'reasoning_effort': config.reasoning_effort,
+        'verbosity': config.verbosity,
+        'service_tier': config.service_tier,
+    })
+    logger.debug('Selected %s translation backend', 'Gemini' if config.google_api_key else 'OpenAI')
+
+    if config.use_old_translator:
+        from .legacy_translator import GPTTranslator, GeminiTranslator
+
+        logger.warning('--use-old-translator is deprecated; using the unchanged historical translator. '
+                       '--translation-threads is ignored.')
+        translator_type = GeminiTranslator if config.google_api_key else GPTTranslator
+        return translator_type(
+            prompt=config.translation_prompt,
+            history_size=config.translation_history_size,
+            use_json_result=config.use_json_result,
+            use_translation_context=config.use_translation_context,
+            timeout=config.translation_timeout,
+            retry_if_translation_fails=config.retry_if_translation_fails,
+            debug_mode=config.debug_mode,
+            **provider_options,
+        )
+
+    from .translation_backends import OpenAITranslationBackend, GeminiTranslationBackend
+    from .translation_clients import TranslationClientPool
+    from .translation_pipeline import TranslationPipeline
+    from .translation_protocol import TranslationProtocol
+    from .translation_types import TranslationSettings
+
+    client_pool = TranslationClientPool(
+        provider='google' if config.google_api_key else 'openai',
+        api_keys=config.google_api_key or config.openai_api_key,
+        base_url=config.google_base_url if config.google_api_key else config.openai_base_url,
+        proxy=config.processing_proxy,
+        verify_ssl=config.verify_ssl,
+    )
+    protocol = TranslationProtocol(
+        prompt=config.translation_prompt,
+        history_size=config.translation_history_size,
+        use_json_result=config.use_json_result,
+        use_translation_context=config.use_translation_context,
+    )
+    backend_type = GeminiTranslationBackend if config.google_api_key else OpenAITranslationBackend
+    backend = backend_type(client_pool=client_pool, protocol=protocol,
+                           debug_mode=config.debug_mode, **provider_options)
+    settings = TranslationSettings(
+        workers=config.translation_threads,
+        history_size=config.translation_history_size,
+        use_translation_context=config.use_translation_context,
+        timeout=config.translation_timeout,
+        retry_if_translation_fails=config.retry_if_translation_fails,
+    )
+    return TranslationPipeline(backend, settings)
+
+
 def run(config: Config):
     """Run the transcription / translation pipeline until the input is exhausted."""
     logger.info('Initializing transcription and translation pipeline')
-    ClientPool.init(openai_api_key=config.openai_api_key,
-                    google_api_key=config.google_api_key,
+    legacy_translation = config.use_old_translator and bool(config.translation_prompt)
+    ClientPool.init(openai_api_key=config.openai_api_key if legacy_translation else None,
+                    google_api_key=config.google_api_key if legacy_translation else None,
                     proxy=config.processing_proxy,
                     openai_base_url=config.openai_base_url,
-                    whisper_api_key=config.whisper_api_key,
-                    whisper_base_url=config.whisper_base_url,
+                    whisper_api_key=(config.whisper_api_key if legacy_translation else
+                                     config.whisper_api_key or config.openai_api_key),
+                    whisper_base_url=(config.whisper_base_url if legacy_translation else
+                                      config.whisper_base_url or config.openai_base_url),
                     google_base_url=config.google_base_url,
                     verify_ssl=config.verify_ssl)
 
@@ -485,43 +569,7 @@ def run(config: Config):
         logger.warning('Using %s as transcription engine.', _transcription_engine_label(config))
         transcriber_future = executor.submit(init_transcriber)
 
-        def init_translator():
-            if not config.translation_prompt:
-                return None
-            common_args = {
-                'prompt': config.translation_prompt,
-                'history_size': config.translation_history_size,
-                'use_json_result': config.use_json_result,
-                'use_translation_context': config.use_translation_context,
-                'timeout': config.translation_timeout,
-                'retry_if_translation_fails': config.retry_if_translation_fails,
-                'debug_mode': config.debug_mode,
-            }
-            if config.google_api_key:
-                logger.debug('Selected Gemini translation backend')
-                return GeminiTranslator(
-                    model=config.gemini_model,
-                    temperature=config.temperature,
-                    top_p=config.top_p,
-                    top_k=config.top_k,
-                    **common_args,
-                )
-            else:
-                logger.debug('Selected OpenAI translation backend')
-                return GPTTranslator(
-                    model=config.gpt_model,
-                    prompt_cache_key=config.prompt_cache_key,
-                    prompt_cache_enabled=config.openai_prompt_cache,
-                    api_mode=config.openai_translation_api,
-                    temperature=config.temperature,
-                    top_p=config.top_p,
-                    reasoning_effort=config.reasoning_effort,
-                    verbosity=config.verbosity,
-                    service_tier=config.service_tier,
-                    **common_args,
-                )
-
-        translator_future = executor.submit(init_translator)
+        translator_future = executor.submit(_create_translator, config)
         exporter_future = executor.submit(
             ResultExporter,
             cqhttp_url=config.cqhttp_url,
@@ -559,64 +607,94 @@ def run(config: Config):
         if callable(stop):
             stop()
 
+    def stop_translation():
+        stop = getattr(translator, 'stop', None)
+        if callable(stop):
+            stop()
+
+    def stop_pipeline():
+        # Wake a scheduler waiting for context/retry before interrupting input.
+        # Neither operation waits for a translation's network request to finish.
+        try:
+            stop_translation()
+        finally:
+            stop_audio_getter()
+
     def handle_worker_error():
         pipeline_failed.set()
-        stop_audio_getter()
+        stop_pipeline()
 
-    getter_thread = start_daemon_thread(
-        audio_getter.loop,
-        name='getter',
-        on_error=handle_worker_error,
-        # Audio getters own their terminal sentinel on every exit path. Avoid
-        # publishing a duplicate when the getter raises into this wrapper.
-        output_eof_on_error=False,
-        output_queue=getter_to_slicer_queue,
-    )
-    pipeline_threads.append(getter_thread)
-    if slicer:
-        pipeline_threads.append(start_daemon_thread(
-            slicer.loop,
-            name='slicer',
+    try:
+        getter_thread = start_daemon_thread(
+            audio_getter.loop,
+            name='getter',
             on_error=handle_worker_error,
-            input_queue=getter_to_slicer_queue,
-            output_queue=slicer_to_transcriber_queue,
-        ))
-    pipeline_threads.append(start_daemon_thread(
-        transcriber.loop,
-        name='transcriber',
-        on_error=handle_worker_error,
-        input_queue=(getter_to_slicer_queue if config.use_modulate_transcription_api else slicer_to_transcriber_queue),
-        output_queue=transcriber_to_translator_queue,
-    ))
-    if translator:
+            # Getters own their terminal sentinel, including exceptional exits.
+            output_eof_on_error=False,
+            output_queue=getter_to_slicer_queue,
+        )
+        pipeline_threads.append(getter_thread)
+        if slicer:
+            pipeline_threads.append(start_daemon_thread(
+                slicer.loop,
+                name='slicer',
+                on_error=handle_worker_error,
+                input_queue=getter_to_slicer_queue,
+                output_queue=slicer_to_transcriber_queue,
+            ))
         pipeline_threads.append(start_daemon_thread(
-            translator.loop,
-            name='translator',
+            transcriber.loop,
+            name='transcriber',
             on_error=handle_worker_error,
-            input_queue=transcriber_to_translator_queue,
-            output_queue=translator_to_exporter_queue,
+            input_queue=(getter_to_slicer_queue if config.use_modulate_transcription_api else slicer_to_transcriber_queue),
+            output_queue=transcriber_to_translator_queue,
         ))
-    exporter_thread = start_daemon_thread(
-        exporter.loop,
-        name='exporter',
-        on_error=handle_worker_error,
-        input_queue=translator_to_exporter_queue,
-    )
-    pipeline_threads.append(exporter_thread)
+        translator_thread = None
+        if translator:
+            translator_thread = start_daemon_thread(
+                translator.loop,
+                name='translator',
+                on_error=handle_worker_error,
+                # The new pipeline owns EOF on every exit. The historical
+                # translator relies on the worker wrapper after an exception.
+                output_eof_on_error=legacy_translation,
+                input_queue=transcriber_to_translator_queue,
+                output_queue=translator_to_exporter_queue,
+            )
+            pipeline_threads.append(translator_thread)
+        exporter_thread = start_daemon_thread(
+            exporter.loop,
+            name='exporter',
+            on_error=handle_worker_error,
+            input_queue=translator_to_exporter_queue,
+        )
+        pipeline_threads.append(exporter_thread)
 
-    while exporter_thread.is_alive():
-        time.sleep(1)
-    if getter_thread.is_alive():
-        logger.debug('Exporter stopped before the audio getter; requesting input shutdown')
-        stop_audio_getter()
-
-    shutdown_deadline = time.monotonic() + 10
-    for worker_thread in pipeline_threads:
-        worker_thread.join(timeout=max(0, shutdown_deadline - time.monotonic()))
-    remaining_workers = [worker_thread.name for worker_thread in pipeline_threads if worker_thread.is_alive()]
-    if remaining_workers:
-        pipeline_failed.set()
-        logger.error('Pipeline worker(s) did not stop within 10 seconds: %s', ', '.join(remaining_workers))
+        while exporter_thread.is_alive():
+            time.sleep(1)
+        input_running = getter_thread.is_alive()
+        translation_running = translator_thread is not None and translator_thread.is_alive()
+        output_finished = getattr(translator, 'output_finished', None)
+        translation_output_finished = output_finished is not None and output_finished.is_set()
+        if input_running or (translation_running and not translation_output_finished):
+            logger.debug('Exporter stopped before its upstream workers; requesting pipeline shutdown')
+            if translation_running and not translation_output_finished:
+                stop_translation()
+            if input_running:
+                stop_audio_getter()
+    except BaseException:
+        # Includes KeyboardInterrupt and SystemExit raised by the getters' signal
+        # handlers. A normal input EOF does not take this cancellation path.
+        stop_pipeline()
+        raise
+    finally:
+        shutdown_deadline = time.monotonic() + 10
+        for worker_thread in pipeline_threads:
+            worker_thread.join(timeout=max(0, shutdown_deadline - time.monotonic()))
+        remaining_workers = [worker_thread.name for worker_thread in pipeline_threads if worker_thread.is_alive()]
+        if remaining_workers:
+            pipeline_failed.set()
+            logger.error('Pipeline worker(s) did not stop within 10 seconds: %s', ', '.join(remaining_workers))
     if pipeline_failed.is_set():
         raise RuntimeError('Pipeline stopped because a worker failed')
     logger.warning('All processing completed, program exits.')
@@ -779,6 +857,14 @@ def _validate_and_normalize(config: Config):
         config.openai_translation_api = 'chat-completions' if config.openai_base_url else 'responses'
         logger.info('Resolved OpenAI translation API mode to %s', config.openai_translation_api)
 
+    for option, value, minimum in (
+            ('--translation-threads', config.translation_threads, 1),
+            ('--translation-history-size', config.translation_history_size, 0),
+            ('--translation-timeout', config.translation_timeout, 0)):
+        if value < minimum:
+            logger.error('%s must be %d or greater', option, minimum)
+            sys.exit(1)
+
     if config.model.endswith('.en'):
         if config.model == 'large.en':
             logger.error('English model does not have large model, please choose from '
@@ -869,6 +955,10 @@ def _validate_and_normalize(config: Config):
         if config.openai_translation_api != 'responses':
             logger.error('OpenAI explicit prompt caching requires --openai-translation-api responses')
             sys.exit(1)
+        if config.use_old_translator:
+            from .legacy_translator import _gpt_model_version
+        else:
+            from .translation_backends import _gpt_model_version
         model_version = _gpt_model_version(config.gpt_model)
         if model_version is not None and model_version < (5, 6):
             logger.error('OpenAI explicit prompt caching requires GPT-5.6 or newer; selected model is %s',

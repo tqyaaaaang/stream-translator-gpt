@@ -8,7 +8,7 @@ import numpy as np
 from stream_translator_gpt.audio_slicer import AudioSlicer
 from stream_translator_gpt.audio_transcriber import AudioTranscriber
 from stream_translator_gpt.common import TranslationTask
-from stream_translator_gpt.llm_translator import LLMTranslator
+from stream_translator_gpt.legacy_translator import LLMTranslator
 
 
 class _FakeTranscriber(AudioTranscriber):
@@ -72,17 +72,16 @@ class TaskLifecycleTest(unittest.TestCase):
         self.assertIs(output_queue.get_nowait().phase, TranslationTask.Phase.TRANSCRIBED)
         self.assertIsNone(output_queue.get_nowait())
 
-    def test_translator_advances_success_and_failure_to_translated_phase(self):
-        translator = _FakeTranslator.__new__(_FakeTranslator)
-        translator.timeout = 0
-        translator.retry_if_translation_fails = False
+    def test_legacy_translator_advances_success_and_failure_to_translated_phase(self):
+        translator = _FakeTranslator(model='test', prompt='Translate', history_size=0,
+                                     use_json_result=False, timeout=0, retry_if_translation_fails=False)
         successful = TranslationTask(1, np.empty(0), (0.0, 1.0))
         successful.translation = 'translated'
         failed = TranslationTask(2, np.empty(0), (1.0, 2.0))
         failed.translation_failed = True
         translator.processing_queue = deque([successful, failed])
 
-        with mock.patch('stream_translator_gpt.llm_translator.logger.error'):
+        with mock.patch('stream_translator_gpt.legacy_translator.logger.error'):
             results = translator._get_results()
 
         self.assertEqual(results, [successful, failed])
