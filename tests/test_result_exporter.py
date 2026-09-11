@@ -7,9 +7,9 @@ from unittest import mock
 import numpy as np
 import tyro
 
-from stream_translator_gpt.common import BOLD, ENDC, TranslationTask
+from stream_translator_gpt.utils.common import BOLD, ENDC, TranslationTask
 from stream_translator_gpt.main import Config
-from stream_translator_gpt.result_exporter import ResultExporter
+from stream_translator_gpt.exporter.result_exporter import ResultExporter
 
 
 class ResultExporterTimestampTest(unittest.TestCase):
@@ -43,7 +43,7 @@ class ResultExporterTimestampTest(unittest.TestCase):
         input_queue.put(task)
         input_queue.put(None)
 
-        with mock.patch('stream_translator_gpt.result_exporter.write_console_utf8') as console_write:
+        with mock.patch('stream_translator_gpt.exporter.result_exporter.write_console_utf8') as console_write:
             exporter.loop(input_queue)
 
         file_payload = exporter.file_queue.get_nowait()
@@ -117,7 +117,7 @@ class ResultExporterTimestampTest(unittest.TestCase):
         input_queue.put(self._task(translation='translated line one\ntranslated line two'))
         input_queue.put(None)
 
-        with mock.patch('stream_translator_gpt.result_exporter.write_console_utf8'):
+        with mock.patch('stream_translator_gpt.exporter.result_exporter.write_console_utf8'):
             exporter.loop(input_queue)
 
         with tempfile.TemporaryDirectory() as temp_dir:

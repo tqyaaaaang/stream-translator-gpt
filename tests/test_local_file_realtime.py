@@ -6,8 +6,8 @@ from unittest import mock
 import numpy as np
 import tyro
 
-from stream_translator_gpt.audio_getter import LocalFileAudioGetter, _RealtimeAudioPacer, _read_ffmpeg_loop
-from stream_translator_gpt.common import SAMPLE_RATE, SAMPLES_PER_FRAME
+from stream_translator_gpt.getter.audio_getter import LocalFileAudioGetter, _RealtimeAudioPacer, _read_ffmpeg_loop
+from stream_translator_gpt.utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME
 from stream_translator_gpt.main import Config, _create_audio_getter
 
 
@@ -155,7 +155,7 @@ class RealtimeFilePacingTest(unittest.TestCase):
         process = mock.Mock(stdout=_SequenceReader([full.tobytes(), tail.tobytes(), b'']))
         output_queue = queue.SimpleQueue()
 
-        with mock.patch('stream_translator_gpt.audio_getter.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.logger.warning') as warning:
             count = _read_ffmpeg_loop(process, full.nbytes, output_queue, source_name='test file')
 
         self.assertEqual(count, 1)
@@ -169,7 +169,7 @@ class RealtimeFilePacingTest(unittest.TestCase):
         pacer = _RealtimeAudioPacer(event, clock=clock, max_lag=0.1)
         clock.now = 1.0
 
-        with mock.patch('stream_translator_gpt.audio_getter.logger.info') as info:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.logger.info') as info:
             self.assertTrue(pacer.wait_for_block(SAMPLES_PER_FRAME))
             self.assertTrue(pacer.wait_for_block(SAMPLES_PER_FRAME))
 
@@ -238,7 +238,7 @@ class LocalFileProcessLifecycleTest(unittest.TestCase):
         output_builder = mock.Mock()
         input_builder.output.return_value = output_builder
         output_builder.run_async.return_value = process
-        return mock.patch('stream_translator_gpt.audio_getter.ffmpeg.input', return_value=input_builder)
+        return mock.patch('stream_translator_gpt.getter.audio_getter.ffmpeg.input', return_value=input_builder)
 
     def test_normal_eof_waits_for_ffmpeg_without_killing_it(self):
         block = np.ones(SAMPLES_PER_FRAME, dtype=np.float32)

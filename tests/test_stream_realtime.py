@@ -3,7 +3,7 @@ import signal
 import unittest
 from unittest import mock
 
-from stream_translator_gpt.audio_getter import StreamAudioGetter, _StreamTransportStats
+from stream_translator_gpt.getter.audio_getter import StreamAudioGetter, _StreamTransportStats
 from stream_translator_gpt.main import Config, _create_audio_getter
 
 
@@ -82,11 +82,11 @@ class StreamRealtimeLoopTest(unittest.TestCase):
         pacer = object()
 
         patches = (
-            mock.patch('stream_translator_gpt.audio_getter._open_stream',
+            mock.patch('stream_translator_gpt.getter.audio_getter._open_stream',
                        return_value=(ffmpeg_process, ytdlp_process, transport_thread, transport_stats)),
-            mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', return_value=1),
-            mock.patch('stream_translator_gpt.audio_getter._wait_for_process', return_value=0),
-            mock.patch('stream_translator_gpt.audio_getter._RealtimeAudioPacer', return_value=pacer),
+            mock.patch('stream_translator_gpt.getter.audio_getter._read_ffmpeg_loop', return_value=1),
+            mock.patch('stream_translator_gpt.getter.audio_getter._wait_for_process', return_value=0),
+            mock.patch('stream_translator_gpt.getter.audio_getter._RealtimeAudioPacer', return_value=pacer),
         )
         with patches[0] as open_stream, patches[1] as read_loop, patches[2], patches[3] as pacer_cls:
             getter.loop(output_queue)
@@ -132,7 +132,7 @@ class StreamRealtimeLoopTest(unittest.TestCase):
                                    realtime=True)
 
         with mock.patch.object(getter.stop_event, 'set') as set_stop, \
-                mock.patch('stream_translator_gpt.audio_getter.sys.exit') as exit_process:
+                mock.patch('stream_translator_gpt.getter.audio_getter.sys.exit') as exit_process:
             getter._exit_handler(signal.SIGINT, None)
 
         set_stop.assert_called_once_with()

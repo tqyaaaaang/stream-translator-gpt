@@ -5,10 +5,10 @@ from unittest import mock
 
 import numpy as np
 
-from stream_translator_gpt.audio_slicer import AudioSlicer
-from stream_translator_gpt.audio_transcriber import AudioTranscriber
-from stream_translator_gpt.common import TranslationTask
-from stream_translator_gpt.legacy_translator import LLMTranslator
+from stream_translator_gpt.slicer.audio_slicer import AudioSlicer
+from stream_translator_gpt.transcriber.audio_transcriber import AudioTranscriber
+from stream_translator_gpt.utils.common import TranslationTask
+from stream_translator_gpt.translator.legacy.legacy_translator import LLMTranslator
 
 
 class _FakeTranscriber(AudioTranscriber):
@@ -81,7 +81,7 @@ class TaskLifecycleTest(unittest.TestCase):
         failed.translation_failed = True
         translator.processing_queue = deque([successful, failed])
 
-        with mock.patch('stream_translator_gpt.legacy_translator.logger.error'):
+        with mock.patch('stream_translator_gpt.translator.legacy.legacy_translator.logger.error'):
             results = translator._get_results()
 
         self.assertEqual(results, [successful, failed])

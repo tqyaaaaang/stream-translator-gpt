@@ -14,12 +14,12 @@ from unittest import mock
 
 import httpx
 
-from stream_translator_gpt.common import TranslationTask
-from stream_translator_gpt.translation_backends import OpenAITranslationBackend, GeminiTranslationBackend
-from stream_translator_gpt.translation_clients import TranslationClientPool
-from stream_translator_gpt.translation_pipeline import TranslationPipeline
-from stream_translator_gpt.translation_protocol import TranslationProtocol
-from stream_translator_gpt.translation_types import TranslationRequest, TranslationResult, TranslationSettings
+from stream_translator_gpt.utils.common import TranslationTask
+from stream_translator_gpt.translator.backends import OpenAITranslationBackend, GeminiTranslationBackend
+from stream_translator_gpt.translator.clients import TranslationClientPool
+from stream_translator_gpt.translator.pipeline import TranslationPipeline
+from stream_translator_gpt.translator.protocol import TranslationProtocol
+from stream_translator_gpt.translator.types import TranslationRequest, TranslationResult, TranslationSettings
 
 
 class _Pool:
@@ -117,7 +117,7 @@ class ProtocolAndBackendTest(unittest.TestCase):
                 create = mock.Mock(return_value=SimpleNamespace(output_text='{"translation":"译文","context":"摘要"}'))
                 current = backend(SimpleNamespace(responses=SimpleNamespace(
                     input_tokens=SimpleNamespace(count=count), create=create)), prompt_cache_enabled=True)
-                with mock.patch('stream_translator_gpt.translation_backends.time.monotonic', side_effect=lambda: now[0]):
+                with mock.patch('stream_translator_gpt.translator.backends.time.monotonic', side_effect=lambda: now[0]):
                     with current.open_session() as session:
                         request = TranslationRequest(1, 'source', deadline=15)
                         if remaining:

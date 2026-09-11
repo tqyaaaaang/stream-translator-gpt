@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlparse
 
-from . import __version__
-from .common import is_ip_host
+from .. import __version__
+from ..utils.common import is_ip_host
 
 logger = logging.getLogger('main')
 

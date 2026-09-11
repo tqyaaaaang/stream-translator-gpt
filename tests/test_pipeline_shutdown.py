@@ -254,9 +254,9 @@ class PipelineShutdownTest(unittest.TestCase):
         translator.stop.assert_called_once()
 
     def test_backend_session_failure_unblocks_exporter_with_exactly_one_eof(self):
-        from stream_translator_gpt.common import TranslationTask
-        from stream_translator_gpt.translation_pipeline import TranslationPipeline
-        from stream_translator_gpt.translation_types import TranslationSettings
+        from stream_translator_gpt.utils.common import TranslationTask
+        from stream_translator_gpt.translator.pipeline import TranslationPipeline
+        from stream_translator_gpt.translator.types import TranslationSettings
 
         class BrokenBackend:
             @contextlib.contextmanager

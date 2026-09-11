@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from .audio import HOP_LENGTH, SAMPLE_RATE, TOKENS_PER_SECOND
 from .tokenizer import Tokenizer
-from ....logging_utils import DDEBUG
+from .....utils.logging_utils import DDEBUG
 
 
 logger = logging.getLogger('main')

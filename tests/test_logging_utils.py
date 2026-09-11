@@ -8,9 +8,9 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
-from stream_translator_gpt import logging_utils
-from stream_translator_gpt.common import ClientPool, start_daemon_thread
-from stream_translator_gpt.logging_utils import (DDEBUG, configure_logging, normalize_verbosity_args,
+from stream_translator_gpt.utils import logging_utils
+from stream_translator_gpt.utils.common import ClientPool, start_daemon_thread
+from stream_translator_gpt.utils.logging_utils import (DDEBUG, configure_logging, normalize_verbosity_args,
                                                  redact_command, redact_url, shutdown_logging, verbosity_from_argv)
 
 

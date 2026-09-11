@@ -158,15 +158,23 @@ stream-translator-gpt {ファイルパス} --pacer realtime --use-modulate-trans
 - **Cqhttp**: ```stream-translator-gpt {URL} --language {入力言語} --cqhttp-url {Cqhttp URL} --cqhttp-token {Cqhttp トークン}```
 - **タイムスタンプ付きテキストファイル**: ```stream-translator-gpt {URL} --language {入力言語} --translation-prompt "{入力言語}から{出力言語}に翻訳" --google-api-key {Google キー} --no-show-transcribe-result --retry-if-translation-fails --output-file-path ./result.txt --output-file-timestamps```
 
+### パッケージ構成
+
+`stream_translator_gpt/` は処理段階ごとに分割しています：音声取得は `getter/`、VAD と音声分割は
+`slicer/`、文字起こしは `transcriber/`、翻訳は `translator/`、出力は `exporter/`、共通処理は `utils/`。
+`main.py` は CLI とパイプラインの組み立てを担当します。文字起こしフィルタと SimulStreaming は
+`transcriber/` に、VAD モデルは `slicer/` に配置します。独立したトップレベルの `utils/term_utils.py`
+と `stream-translator-build-terms` コマンドは変更しません。
+
 ### 翻訳モジュールの責務
 
-デフォルト実装は、ライフサイクル（`translation_pipeline.py`）、スケジューリングと順序付き出力
-（`translation_scheduler.py`）、ワーカーループ（`translation_worker.py`）、API 呼び出し
-（`translation_backends.py`）、ワーカー専用クライアント（`translation_clients.py`）、プロンプトと結果解析
-（`translation_protocol.py`）を分離しています。`translation_types.py` の不変リクエスト・結果で通信し、
+デフォルト実装は、ライフサイクル（`translator/pipeline.py`）、スケジューリングと順序付き出力
+（`translator/scheduler.py`）、ワーカーループ（`translator/worker.py`）、API 呼び出し
+（`translator/backends.py`）、ワーカー専用クライアント（`translator/clients.py`）、プロンプトと結果解析
+（`translator/protocol.py`）を分離しています。`translator/types.py` の不変リクエスト・結果で通信し、
 パイプラインタスクを更新するのはスケジューラだけです。ワーカーは context や出力順、再試行の待機を行いません。
 
-`--use-old-translator` は `ab314cf` の実装を無変更で保存した `legacy_translator.py` を直接使用し、
+`--use-old-translator` は `ab314cf` の実装を無変更で保存した `translator/legacy/legacy_translator.py` を直接使用し、
 新しい翻訳モジュールを読み込みません。従来のクライアントプール、再試行、タイムアウト、終了時の制約も維持します。
 context モードは逐次処理、それ以外は最大 10 リクエストです。`--translation-threads` は新実装だけに適用されます。
 

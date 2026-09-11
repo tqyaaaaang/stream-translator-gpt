@@ -1,7 +1,7 @@
 import io
 import unittest
 
-from stream_translator_gpt.common import write_console_utf8
+from stream_translator_gpt.utils.common import write_console_utf8
 
 
 class ConsoleOutputTest(unittest.TestCase):

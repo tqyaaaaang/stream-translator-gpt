@@ -2,8 +2,8 @@ import unittest
 
 import tyro
 
-from stream_translator_gpt import filters
-from stream_translator_gpt.audio_transcriber import AudioTranscriber
+from stream_translator_gpt.transcriber import filters
+from stream_translator_gpt.transcriber.audio_transcriber import AudioTranscriber
 from stream_translator_gpt.main import Config, _preprocess_deprecated_flags
 
 

@@ -14,9 +14,9 @@ from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.frames import Close
 from websockets.http11 import Response
 
-from stream_translator_gpt.common import SAMPLE_RATE, SAMPLES_PER_FRAME
+from stream_translator_gpt.utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME
 from stream_translator_gpt.main import Config, _validate_and_normalize
-from stream_translator_gpt.modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_REPLAY_SECONDS,
+from stream_translator_gpt.transcriber.modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_REPLAY_SECONDS,
                                                         MODULATE_STREAM_MAX_SEND_RATE, ModulateStreamingError,
                                                         ModulateStreamingTranscriber, _AudioSendPacer,
                                                         _AudioSendProgress, _AudioStreamState)
@@ -368,7 +368,7 @@ class AudioSendPacerTest(unittest.TestCase):
 class ModulateProtocolTest(unittest.TestCase):
 
     def test_transcript_print_uses_shared_utf8_writer(self):
-        with mock.patch('stream_translator_gpt.modulate_transcriber.write_console_utf8') as writer:
+        with mock.patch('stream_translator_gpt.transcriber.modulate_transcriber.write_console_utf8') as writer:
             ModulateStreamingTranscriber._print_transcript('テスト。')
         writer.assert_called_once_with('テスト。')
 

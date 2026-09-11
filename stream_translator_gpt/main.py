@@ -19,13 +19,13 @@ if __name__ == '__main__':
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     __package__ = "stream_translator_gpt"
 
-from .common import ClientPool, SAMPLE_RATE, SAMPLES_PER_FRAME, start_daemon_thread, is_url
-from .audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAudioGetter, StreamAudioGetter
-from .audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
-from .modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_STREAM_MAX_SEND_RATE,
+from .utils.common import ClientPool, SAMPLE_RATE, SAMPLES_PER_FRAME, start_daemon_thread, is_url
+from .getter.audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAudioGetter, StreamAudioGetter
+from .transcriber.audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
+from .transcriber.modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_STREAM_MAX_SEND_RATE,
                                    ModulateStreamingTranscriber)
-from .result_exporter import ResultExporter
-from .logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
+from .exporter.result_exporter import ResultExporter
+from .utils.logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
 from . import __version__
 
 
@@ -422,7 +422,7 @@ def _create_translator(config: Config):
     logger.debug('Selected %s translation backend', 'Gemini' if config.google_api_key else 'OpenAI')
 
     if config.use_old_translator:
-        from .legacy_translator import GPTTranslator, GeminiTranslator
+        from .translator.legacy.legacy_translator import GPTTranslator, GeminiTranslator
 
         logger.warning('--use-old-translator is deprecated; using the unchanged historical translator. '
                        '--translation-threads is ignored.')
@@ -438,11 +438,11 @@ def _create_translator(config: Config):
             **provider_options,
         )
 
-    from .translation_backends import OpenAITranslationBackend, GeminiTranslationBackend
-    from .translation_clients import TranslationClientPool
-    from .translation_pipeline import TranslationPipeline
-    from .translation_protocol import TranslationProtocol
-    from .translation_types import TranslationSettings
+    from .translator.backends import OpenAITranslationBackend, GeminiTranslationBackend
+    from .translator.clients import TranslationClientPool
+    from .translator.pipeline import TranslationPipeline
+    from .translator.protocol import TranslationProtocol
+    from .translator.types import TranslationSettings
 
     client_pool = TranslationClientPool(
         provider='google' if config.google_api_key else 'openai',
@@ -501,7 +501,7 @@ def run(config: Config):
             slicer_future = None
         else:
             # Keep the VAD dependency out of the Modulate path entirely.
-            from .audio_slicer import AudioSlicer
+            from .slicer.audio_slicer import AudioSlicer
             slicer_future = executor.submit(
                 AudioSlicer,
                 min_audio_length=config.min_audio_length,
@@ -884,7 +884,7 @@ def _validate_and_normalize(config: Config):
             logger.error('Device recording interval must be greater than zero')
             sys.exit(1)
         try:
-            from .audio_getter import _device_gain
+            from .getter.audio_getter import _device_gain
             _device_gain(config.device_multiplier)
         except ValueError as exc:
             logger.error('%s', exc)
@@ -956,9 +956,9 @@ def _validate_and_normalize(config: Config):
             logger.error('OpenAI explicit prompt caching requires --openai-translation-api responses')
             sys.exit(1)
         if config.use_old_translator:
-            from .legacy_translator import _gpt_model_version
+            from .translator.legacy.legacy_translator import _gpt_model_version
         else:
-            from .translation_backends import _gpt_model_version
+            from .translator.backends import _gpt_model_version
         model_version = _gpt_model_version(config.gpt_model)
         if model_version is not None and model_version < (5, 6):
             logger.error('OpenAI explicit prompt caching requires GPT-5.6 or newer; selected model is %s',

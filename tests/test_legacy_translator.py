@@ -17,8 +17,8 @@ from unittest import mock
 import httpx
 
 from stream_translator_gpt import main
-from stream_translator_gpt import legacy_translator
-from stream_translator_gpt.common import ClientPool, TranslationTask
+from stream_translator_gpt.translator.legacy import legacy_translator
+from stream_translator_gpt.utils.common import ClientPool, TranslationTask
 from stream_translator_gpt.main import Config
 
 
@@ -67,9 +67,11 @@ for google_key in (None, 'fake-google-key'):
                     google_api_key=google_key, use_old_translator=True, openai_prompt_cache=True)
     _validate_and_normalize(config)
     translator = _create_translator(config)
-    assert translator.__class__.__module__ == 'stream_translator_gpt.legacy_translator'
+    assert translator.__class__.__module__ == 'stream_translator_gpt.translator.legacy.legacy_translator'
 for name in sys.modules:
-    assert not name.startswith('stream_translator_gpt.translation_'), name
+    if name.startswith('stream_translator_gpt.translator.'):
+        assert name == 'stream_translator_gpt.translator.legacy' or name.startswith(
+            'stream_translator_gpt.translator.legacy.'), name
     assert name != 'stream_translator_gpt.llm_translator', name
 '''
         result = subprocess.run([sys.executable, '-B', '-c', script], cwd=Path(__file__).resolve().parents[1],

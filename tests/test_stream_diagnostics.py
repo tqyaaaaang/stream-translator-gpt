@@ -11,7 +11,7 @@ from unittest import mock
 
 import numpy as np
 
-from stream_translator_gpt.audio_getter import (
+from stream_translator_gpt.getter.audio_getter import (
     StreamAudioGetter,
     _log_stream_tool_versions,
     _log_stream_format_diagnostic,
@@ -22,7 +22,7 @@ from stream_translator_gpt.audio_getter import (
     _transport,
     _wait_for_process,
 )
-from stream_translator_gpt.logging_utils import configure_logging, shutdown_logging
+from stream_translator_gpt.utils.logging_utils import configure_logging, shutdown_logging
 
 
 class _SequenceReader:
@@ -102,7 +102,7 @@ class StreamDiagnosticsTest(unittest.TestCase):
         ffmpeg = mock.Mock()
         stats = _StreamTransportStats(started_at=10.0)
 
-        with mock.patch('stream_translator_gpt.audio_getter.time.monotonic', side_effect=[12.5, 14.0]):
+        with mock.patch('stream_translator_gpt.getter.audio_getter.time.monotonic', side_effect=[12.5, 14.0]):
             result = _transport(ytdlp, ffmpeg, stats)
         shutdown_logging()
 
@@ -122,7 +122,7 @@ class StreamDiagnosticsTest(unittest.TestCase):
         process = mock.Mock(stdout=_SequenceReader([audio.tobytes(), b'']))
         output_queue = queue.SimpleQueue()
 
-        with mock.patch('stream_translator_gpt.audio_getter.time.monotonic', return_value=12.0):
+        with mock.patch('stream_translator_gpt.getter.audio_getter.time.monotonic', return_value=12.0):
             block_count = _read_ffmpeg_loop(process,
                                             audio.nbytes,
                                             output_queue,
@@ -141,7 +141,7 @@ class StreamDiagnosticsTest(unittest.TestCase):
         audio = np.array([-0.5, 0.25], dtype=np.float32)
         process = mock.Mock(stdout=_SequenceReader([audio.tobytes(), b'']))
 
-        with mock.patch('stream_translator_gpt.audio_getter.np.isfinite') as isfinite:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.np.isfinite') as isfinite:
             block_count = _read_ffmpeg_loop(process,
                                             audio.nbytes,
                                             queue.SimpleQueue(),
@@ -183,8 +183,8 @@ class StreamDiagnosticsTest(unittest.TestCase):
         ytdlp.poll.return_value = None
         ytdlp.wait.return_value = -15
 
-        with mock.patch('stream_translator_gpt.audio_getter.subprocess.Popen', return_value=ytdlp):
-            with mock.patch('stream_translator_gpt.audio_getter.ffmpeg.input',
+        with mock.patch('stream_translator_gpt.getter.audio_getter.subprocess.Popen', return_value=ytdlp):
+            with mock.patch('stream_translator_gpt.getter.audio_getter.ffmpeg.input',
                             side_effect=RuntimeError('start failed')):
                 with self.assertRaisesRegex(RuntimeError, 'start failed'):
                     _open_stream('https://example.com/stream', 'ba', None, None, 'workdir')
@@ -195,9 +195,9 @@ class StreamDiagnosticsTest(unittest.TestCase):
     def test_posix_process_tree_kill_uses_private_process_group(self):
         process = mock.Mock(pid=1234)
 
-        with mock.patch('stream_translator_gpt.audio_getter.os.name', 'posix'), \
-                mock.patch('stream_translator_gpt.audio_getter.os.killpg', create=True) as killpg, \
-                mock.patch('stream_translator_gpt.audio_getter.signal.SIGKILL', 9, create=True):
+        with mock.patch('stream_translator_gpt.getter.audio_getter.os.name', 'posix'), \
+                mock.patch('stream_translator_gpt.getter.audio_getter.os.killpg', create=True) as killpg, \
+                mock.patch('stream_translator_gpt.getter.audio_getter.signal.SIGKILL', 9, create=True):
             _kill_process(process, 'yt-dlp', process_tree=True)
 
         killpg.assert_called_once_with(1234, 9)
@@ -206,8 +206,8 @@ class StreamDiagnosticsTest(unittest.TestCase):
     def test_windows_process_tree_kill_uses_parent_process(self):
         process = mock.Mock(pid=1234)
 
-        with mock.patch('stream_translator_gpt.audio_getter.os.name', 'nt'), \
-                mock.patch('stream_translator_gpt.audio_getter.os.killpg', create=True) as killpg:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.os.name', 'nt'), \
+                mock.patch('stream_translator_gpt.getter.audio_getter.os.killpg', create=True) as killpg:
             _kill_process(process, 'yt-dlp', process_tree=True)
 
         process.kill.assert_called_once_with()
@@ -222,9 +222,9 @@ class StreamDiagnosticsTest(unittest.TestCase):
         input_builder.output.return_value = output_builder
         transport_thread = mock.Mock()
 
-        with mock.patch('stream_translator_gpt.audio_getter.subprocess.Popen', return_value=ytdlp), \
-                mock.patch('stream_translator_gpt.audio_getter.ffmpeg.input', return_value=input_builder) as ffinput, \
-                mock.patch('stream_translator_gpt.audio_getter.threading.Thread', return_value=transport_thread):
+        with mock.patch('stream_translator_gpt.getter.audio_getter.subprocess.Popen', return_value=ytdlp), \
+                mock.patch('stream_translator_gpt.getter.audio_getter.ffmpeg.input', return_value=input_builder) as ffinput, \
+                mock.patch('stream_translator_gpt.getter.audio_getter.threading.Thread', return_value=transport_thread):
             _open_stream('https://example.test/live', 'ba', None, None, 'workdir')
 
         ffinput.assert_called_once_with('pipe:0', loglevel='error')
@@ -236,7 +236,7 @@ class StreamDiagnosticsTest(unittest.TestCase):
         output_builder.run_async.assert_called_once_with(pipe_stdin=True, pipe_stdout=True)
 
     def test_tool_versions_are_logged_once_without_exposing_commands(self):
-        import stream_translator_gpt.audio_getter as audio_getter
+        import stream_translator_gpt.getter.audio_getter as audio_getter
 
         output = io.StringIO()
         configure_logging(2, stream=output)
@@ -244,8 +244,8 @@ class StreamDiagnosticsTest(unittest.TestCase):
         previous = audio_getter._stream_versions_logged
         audio_getter._stream_versions_logged = False
         try:
-            with mock.patch('stream_translator_gpt.audio_getter.version', return_value='test-ytdlp'), \
-                    mock.patch('stream_translator_gpt.audio_getter.subprocess.run', return_value=completed) as run:
+            with mock.patch('stream_translator_gpt.getter.audio_getter.version', return_value='test-ytdlp'), \
+                    mock.patch('stream_translator_gpt.getter.audio_getter.subprocess.run', return_value=completed) as run:
                 _log_stream_tool_versions()
                 _log_stream_tool_versions()
             shutdown_logging()
@@ -287,10 +287,10 @@ class StreamDiagnosticsTest(unittest.TestCase):
         stats = _StreamTransportStats(started_at=10.0, media_bytes=1024, ytdlp_return_code=0)
         output_queue = queue.SimpleQueue()
 
-        with mock.patch('stream_translator_gpt.audio_getter._open_stream',
+        with mock.patch('stream_translator_gpt.getter.audio_getter._open_stream',
                         return_value=(ffmpeg_process, ytdlp_process, transport_thread, stats)), \
-                mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', return_value=0), \
-                mock.patch('stream_translator_gpt.audio_getter._wait_for_process', return_value=0):
+                mock.patch('stream_translator_gpt.getter.audio_getter._read_ffmpeg_loop', return_value=0), \
+                mock.patch('stream_translator_gpt.getter.audio_getter._wait_for_process', return_value=0):
             with self.assertRaisesRegex(RuntimeError, 'no decoded PCM audio was produced'):
                 getter.loop(output_queue)
 
@@ -306,10 +306,10 @@ class StreamDiagnosticsTest(unittest.TestCase):
         stats = _StreamTransportStats(started_at=10.0, media_bytes=1024, ytdlp_return_code=3)
         output_queue = queue.SimpleQueue()
 
-        with mock.patch('stream_translator_gpt.audio_getter._open_stream',
+        with mock.patch('stream_translator_gpt.getter.audio_getter._open_stream',
                         return_value=(ffmpeg_process, ytdlp_process, transport_thread, stats)), \
-                mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', return_value=1), \
-                mock.patch('stream_translator_gpt.audio_getter._wait_for_process', return_value=7):
+                mock.patch('stream_translator_gpt.getter.audio_getter._read_ffmpeg_loop', return_value=1), \
+                mock.patch('stream_translator_gpt.getter.audio_getter._wait_for_process', return_value=7):
             with self.assertRaisesRegex(RuntimeError, 'yt-dlp exited with status 3; ffmpeg exited with status 7'):
                 getter.loop(output_queue)
 
@@ -330,11 +330,11 @@ class StreamDiagnosticsTest(unittest.TestCase):
             if message == 'Stream audio input finished':
                 getter.stop_event.set()
 
-        with mock.patch('stream_translator_gpt.audio_getter._open_stream',
+        with mock.patch('stream_translator_gpt.getter.audio_getter._open_stream',
                         return_value=(ffmpeg_process, ytdlp_process, transport_thread, stats)), \
-                mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', return_value=1), \
-                mock.patch('stream_translator_gpt.audio_getter._wait_for_process', return_value=0), \
-                mock.patch('stream_translator_gpt.audio_getter.logger.info', side_effect=request_stop):
+                mock.patch('stream_translator_gpt.getter.audio_getter._read_ffmpeg_loop', return_value=1), \
+                mock.patch('stream_translator_gpt.getter.audio_getter._wait_for_process', return_value=0), \
+                mock.patch('stream_translator_gpt.getter.audio_getter.logger.info', side_effect=request_stop):
             getter.loop(output_queue)
 
         self.assertIsNone(output_queue.get_nowait())
@@ -351,9 +351,9 @@ class StreamDiagnosticsTest(unittest.TestCase):
         stats = _StreamTransportStats(started_at=10.0)
         output_queue = queue.SimpleQueue()
 
-        with mock.patch('stream_translator_gpt.audio_getter._open_stream',
+        with mock.patch('stream_translator_gpt.getter.audio_getter._open_stream',
                         return_value=(ffmpeg_process, ytdlp_process, transport_thread, stats)), \
-                mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', side_effect=OSError('read failed')):
+                mock.patch('stream_translator_gpt.getter.audio_getter._read_ffmpeg_loop', side_effect=OSError('read failed')):
             with self.assertRaisesRegex(OSError, 'read failed'):
                 getter.loop(output_queue)
 
@@ -398,10 +398,10 @@ class StreamDiagnosticsTest(unittest.TestCase):
             except Exception as exc:  # pragma: no cover - assertion below reports the failure
                 errors.append(exc)
 
-        with mock.patch('stream_translator_gpt.audio_getter._open_stream',
+        with mock.patch('stream_translator_gpt.getter.audio_getter._open_stream',
                         return_value=(ffmpeg_process, ytdlp_process, transport_thread, stats)), \
-                mock.patch('stream_translator_gpt.audio_getter._read_ffmpeg_loop', side_effect=wait_until_stopped), \
-                mock.patch('stream_translator_gpt.audio_getter.os.killpg', create=True) as killpg:
+                mock.patch('stream_translator_gpt.getter.audio_getter._read_ffmpeg_loop', side_effect=wait_until_stopped), \
+                mock.patch('stream_translator_gpt.getter.audio_getter.os.killpg', create=True) as killpg:
             # Always mock the OS call: these are fake PIDs, never real children.
             ytdlp_process.poll.side_effect = lambda: (
                 -9 if ytdlp_process.kill.called or killpg.called else None)
@@ -486,10 +486,10 @@ class StreamDiagnosticsTest(unittest.TestCase):
         def safe_kill(process, _process_name, process_tree=False):
             process.kill()
 
-        with mock.patch('stream_translator_gpt.audio_getter.subprocess.Popen', return_value=ytdlp_process), \
-                mock.patch('stream_translator_gpt.audio_getter.ffmpeg.input', return_value=input_builder), \
-                mock.patch('stream_translator_gpt.audio_getter.threading.Thread', return_value=transport_thread), \
-                mock.patch('stream_translator_gpt.audio_getter._kill_process', side_effect=safe_kill) as kill_process:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.subprocess.Popen', return_value=ytdlp_process), \
+                mock.patch('stream_translator_gpt.getter.audio_getter.ffmpeg.input', return_value=input_builder), \
+                mock.patch('stream_translator_gpt.getter.audio_getter.threading.Thread', return_value=transport_thread), \
+                mock.patch('stream_translator_gpt.getter.audio_getter._kill_process', side_effect=safe_kill) as kill_process:
             with self.assertRaisesRegex(RuntimeError, 'thread failed'):
                 _open_stream('https://example.test/live', 'ba', None, None, 'workdir')
 

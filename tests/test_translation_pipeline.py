@@ -5,9 +5,9 @@ from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from unittest import mock
 
-from stream_translator_gpt.common import LoopWorkerBase, TranslationTask
-from stream_translator_gpt.translation_pipeline import TranslationPipeline
-from stream_translator_gpt.translation_types import TranslationRequest, TranslationResult, TranslationSettings
+from stream_translator_gpt.utils.common import LoopWorkerBase, TranslationTask
+from stream_translator_gpt.translator.pipeline import TranslationPipeline
+from stream_translator_gpt.translator.types import TranslationRequest, TranslationResult, TranslationSettings
 
 
 class _Backend:
@@ -141,7 +141,7 @@ class TranslationPipelineTest(unittest.TestCase):
                 (False, 0, 10, False), (True, 2, 3, False), (True, 2, 4, True),
                 (True, 0, 1, False), (True, 0, 3, True)):
             with self.subTest(context=context, history=history, workers=workers):
-                with mock.patch('stream_translator_gpt.translation_pipeline.logger.warning') as warning:
+                with mock.patch('stream_translator_gpt.translator.pipeline.logger.warning') as warning:
                     pipeline = TranslationPipeline(_Backend(), TranslationSettings(
                         workers=workers, history_size=history, use_translation_context=context))
                 self.assertEqual(warning.call_count, int(expected))

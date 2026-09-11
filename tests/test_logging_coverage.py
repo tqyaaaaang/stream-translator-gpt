@@ -30,9 +30,9 @@ class LoggingCoverageTest(unittest.TestCase):
 
     def test_project_print_calls_are_only_business_output(self):
         allowed_functions = {
-            pathlib.Path('stream_translator_gpt/audio_transcriber.py'): {'loop'},
+            pathlib.Path('stream_translator_gpt/transcriber/audio_transcriber.py'): {'loop'},
             pathlib.Path('stream_translator_gpt/main.py'): {'_print_audio_devices'},
-            pathlib.Path('stream_translator_gpt/result_exporter.py'): {'loop'},
+            pathlib.Path('stream_translator_gpt/exporter/result_exporter.py'): {'loop'},
         }
         unexpected = []
 

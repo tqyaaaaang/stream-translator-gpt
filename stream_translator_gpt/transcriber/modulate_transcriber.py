@@ -13,7 +13,7 @@ from urllib.parse import quote, quote_plus, urlencode
 import numpy as np
 
 from .audio_transcriber import AudioTranscriber
-from .common import SAMPLE_RATE, TranslationTask, sec2str, write_console_utf8
+from ..utils.common import SAMPLE_RATE, TranslationTask, sec2str, write_console_utf8
 
 
 logger = logging.getLogger('main')

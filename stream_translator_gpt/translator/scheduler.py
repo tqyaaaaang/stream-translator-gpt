@@ -14,9 +14,9 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .common import TranslationTask
-from .translation_types import TranslationBackend, TranslationRequest, TranslationResult, TranslationSettings
-from .translation_worker import (TranslationAttempt, TranslationCompletion, TranslationWorker,
+from ..utils.common import TranslationTask
+from .types import TranslationBackend, TranslationRequest, TranslationResult, TranslationSettings
+from .worker import (TranslationAttempt, TranslationCompletion, TranslationWorker,
                                  TranslationWorkerEvent)
 
 

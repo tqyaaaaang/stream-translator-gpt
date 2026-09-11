@@ -7,9 +7,9 @@ from unittest import mock
 import numpy as np
 import tyro
 
-from stream_translator_gpt.common import ClientPool, TranslationTask
-from stream_translator_gpt.legacy_translator import GPTTranslator, _parse_json_completion
-from stream_translator_gpt.logging_utils import configure_logging, shutdown_logging
+from stream_translator_gpt.utils.common import ClientPool, TranslationTask
+from stream_translator_gpt.translator.legacy.legacy_translator import GPTTranslator, _parse_json_completion
+from stream_translator_gpt.utils.logging_utils import configure_logging, shutdown_logging
 from stream_translator_gpt.main import Config, _validate_and_normalize
 
 
@@ -212,7 +212,7 @@ class GPTResponsesTranslatorTest(unittest.TestCase):
         with mock.patch.object(ClientPool,
                                'get_openai_client',
                                return_value=SimpleNamespace(responses=responses)), mock.patch(
-                                   'stream_translator_gpt.legacy_translator.logger.debug') as debug:
+                                   'stream_translator_gpt.translator.legacy.legacy_translator.logger.debug') as debug:
             translator.translate(self._task())
 
         self.assertTrue(any(call.args[:3] ==
@@ -223,7 +223,7 @@ class GPTResponsesTranslatorTest(unittest.TestCase):
         client = SimpleNamespace(responses=_FakeResponses(input_tokens=1023))
         translator = self._translator(prompt_cache_enabled=True)
 
-        with mock.patch('stream_translator_gpt.legacy_translator.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.translator.legacy.legacy_translator.logger.warning') as warning:
             translator._warn_if_prompt_cache_prefix_is_too_short(client, 'x' * 1200)
             translator._warn_if_prompt_cache_prefix_is_too_short(client, 'x' * 1200)
 
@@ -234,7 +234,7 @@ class GPTResponsesTranslatorTest(unittest.TestCase):
         responses = _FakeResponses(input_tokens=1023)
         translator = self._translator(prompt_cache_enabled=True)
 
-        with mock.patch('stream_translator_gpt.legacy_translator.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.translator.legacy.legacy_translator.logger.warning') as warning:
             translator._warn_if_prompt_cache_prefix_is_too_short(SimpleNamespace(responses=responses), 'short')
 
         warning.assert_called_once()
@@ -244,7 +244,7 @@ class GPTResponsesTranslatorTest(unittest.TestCase):
         client = SimpleNamespace(responses=_FakeResponses(input_tokens=1024))
         translator = self._translator(prompt_cache_enabled=True)
 
-        with mock.patch('stream_translator_gpt.legacy_translator.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.translator.legacy.legacy_translator.logger.warning') as warning:
             translator._warn_if_prompt_cache_prefix_is_too_short(client, 'short')
 
         warning.assert_not_called()

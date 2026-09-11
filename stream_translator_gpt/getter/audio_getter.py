@@ -20,8 +20,8 @@ import ffmpeg
 import numpy as np
 from scipy.signal import resample
 
-from .common import SAMPLE_RATE, SAMPLES_PER_FRAME, LoopWorkerBase
-from .logging_utils import redact_url
+from ..utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME, LoopWorkerBase
+from ..utils.logging_utils import redact_url
 
 
 logger = logging.getLogger('main')

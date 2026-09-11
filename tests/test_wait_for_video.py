@@ -7,7 +7,7 @@ from unittest import mock
 
 import tyro
 
-from stream_translator_gpt.audio_getter import StreamAudioGetter, _open_stream
+from stream_translator_gpt.getter.audio_getter import StreamAudioGetter, _open_stream
 from stream_translator_gpt.main import (
     DEFAULT_WAIT_FOR_VIDEO_SECONDS,
     Config,
@@ -139,11 +139,11 @@ class WaitForVideoWiringTest(unittest.TestCase):
         ffmpeg_builder.output.return_value.run_async.return_value = ffmpeg_process
         transport_thread = mock.Mock()
 
-        with mock.patch('stream_translator_gpt.audio_getter.subprocess.Popen',
+        with mock.patch('stream_translator_gpt.getter.audio_getter.subprocess.Popen',
                         return_value=ytdlp_process) as popen, \
-                mock.patch('stream_translator_gpt.audio_getter.ffmpeg.input',
+                mock.patch('stream_translator_gpt.getter.audio_getter.ffmpeg.input',
                            return_value=ffmpeg_builder), \
-                mock.patch('stream_translator_gpt.audio_getter.threading.Thread',
+                mock.patch('stream_translator_gpt.getter.audio_getter.threading.Thread',
                            return_value=transport_thread):
             _open_stream(
                 'https://example.test/live',
@@ -265,7 +265,7 @@ class WaitForVideoWiringTest(unittest.TestCase):
         getter.started.set()
 
         with mock.patch.object(getter.finished, 'wait', return_value=True) as wait_for_cleanup, \
-                mock.patch('stream_translator_gpt.audio_getter.sys.exit') as exit_process:
+                mock.patch('stream_translator_gpt.getter.audio_getter.sys.exit') as exit_process:
             getter._exit_handler(signal.SIGTERM, None)
 
         wait_for_cleanup.assert_called_once_with(timeout=10.0)
@@ -283,7 +283,7 @@ class WaitForVideoWiringTest(unittest.TestCase):
         getter.ffmpeg_process = mock.Mock()
         getter.ytdlp_process = mock.Mock()
 
-        with mock.patch('stream_translator_gpt.audio_getter.sys.exit') as exit_process:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.sys.exit') as exit_process:
             getter._exit_handler(signal.SIGINT, None)
 
         self.assertTrue(getter.stop_event.is_set())

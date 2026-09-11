@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 
-from . import __version__
+from .. import __version__
 
 SAMPLE_RATE = 16000
 SAMPLES_PER_FRAME = 512  # Requested by silero-vad >= v5

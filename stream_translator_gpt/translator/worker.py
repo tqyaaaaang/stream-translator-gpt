@@ -9,8 +9,8 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
-from .common import LogTime
-from .translation_types import TranslationBackend, TranslationRequest, TranslationResult
+from ..utils.common import LogTime
+from .types import TranslationBackend, TranslationRequest, TranslationResult
 
 
 logger = logging.getLogger('main')

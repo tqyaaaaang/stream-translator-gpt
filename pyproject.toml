@@ -74,5 +74,10 @@ where = ["."]
 include = ["stream_translator_gpt*", "webui*", "utils*"]
 
 [tool.setuptools.package-data]
-stream_translator_gpt = ["*.jit", "**/*.tiktoken", "**/*.npz"]
+"stream_translator_gpt.slicer" = ["*.jit"]
+"stream_translator_gpt.transcriber.simul_streaming" = ["LICENCE.txt"]
+"stream_translator_gpt.transcriber.simul_streaming.simul_whisper.whisper" = [
+  "assets/*.tiktoken",
+  "assets/*.npz",
+]
 webui = ["*.json", "locales/*.json"]

@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from stream_translator_gpt.modulate_transcriber import PartialUtteranceSplitter
+from stream_translator_gpt.transcriber.modulate_transcriber import PartialUtteranceSplitter
 
 
 class _FakeClock:

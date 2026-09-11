@@ -47,11 +47,11 @@ class ParallelTranslationCliTest(unittest.TestCase):
         warning.assert_not_called()
 
     def test_new_factory_composes_separate_components_for_both_providers(self):
-        from stream_translator_gpt import translation_backends
-        from stream_translator_gpt import translation_clients
-        from stream_translator_gpt import translation_pipeline
-        from stream_translator_gpt import translation_protocol
-        from stream_translator_gpt import translation_types
+        from stream_translator_gpt.translator import backends as translation_backends
+        from stream_translator_gpt.translator import clients as translation_clients
+        from stream_translator_gpt.translator import pipeline as translation_pipeline
+        from stream_translator_gpt.translator import protocol as translation_protocol
+        from stream_translator_gpt.translator import types as translation_types
 
         for google_key in (None, 'google-test-key'):
             with self.subTest(google=bool(google_key)):

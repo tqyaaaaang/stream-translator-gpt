@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from .translation_types import TranslationRequest, TranslationResult
+from .types import TranslationRequest, TranslationResult
 
 logger = logging.getLogger('main')
 

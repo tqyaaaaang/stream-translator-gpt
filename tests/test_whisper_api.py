@@ -6,8 +6,8 @@ from unittest import mock
 import numpy as np
 import tyro
 
-from stream_translator_gpt.audio_transcriber import RemoteOpenaiTranscriber
-from stream_translator_gpt.common import ClientPool
+from stream_translator_gpt.transcriber.audio_transcriber import RemoteOpenaiTranscriber
+from stream_translator_gpt.utils.common import ClientPool
 from stream_translator_gpt.main import Config, _validate_and_normalize
 
 

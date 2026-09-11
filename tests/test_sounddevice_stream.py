@@ -9,8 +9,8 @@ from unittest import mock
 
 import numpy as np
 
-from stream_translator_gpt.audio_getter import SoundDeviceAudioGetter, _DebugAudioDumper
-from stream_translator_gpt.common import SAMPLE_RATE, SAMPLES_PER_FRAME
+from stream_translator_gpt.getter.audio_getter import SoundDeviceAudioGetter, _DebugAudioDumper
+from stream_translator_gpt.utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME
 
 
 class _FakeInputStream:
@@ -116,7 +116,7 @@ class SoundDeviceStreamTest(unittest.TestCase):
         getter = _make_getter(input_stream, interval=SAMPLES_PER_FRAME / SAMPLE_RATE)
         output_queue = queue.SimpleQueue()
 
-        with mock.patch('stream_translator_gpt.audio_getter.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.logger.warning') as warning:
             getter.loop(output_queue)
 
         output = _drain(output_queue)
@@ -205,8 +205,8 @@ class DebugAudioDumperTest(unittest.TestCase):
             output_dir = Path(temp_dir)
             dumper = _DebugAudioDumper(str(output_dir), 4 / SAMPLE_RATE, max_clips=1)
 
-            with mock.patch('stream_translator_gpt.audio_getter.os.replace', side_effect=OSError('disk error')):
-                with mock.patch('stream_translator_gpt.audio_getter.logger.exception') as logger_exception:
+            with mock.patch('stream_translator_gpt.getter.audio_getter.os.replace', side_effect=OSError('disk error')):
+                with mock.patch('stream_translator_gpt.getter.audio_getter.logger.exception') as logger_exception:
                     dumper.add(np.ones(4, dtype=np.float32))
 
             logger_exception.assert_called_once_with('Failed to write device debug audio clip')

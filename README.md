@@ -158,16 +158,24 @@ stream-translator-gpt /path/to/file --pacer realtime --use-modulate-transcriptio
 - **Cqhttp**: ```stream-translator-gpt {URL} --language {input_language} --cqhttp-url {your_cqhttp_url} --cqhttp-token {your_cqhttp_token}```
 - **Timestamped text file**: ```stream-translator-gpt {URL} --language {input_language} --translation-prompt "Translate from {input_language} to {output_language}" --google-api-key {your_google_key} --no-show-transcribe-result --retry-if-translation-fails --output-file-path ./result.txt --output-file-timestamps```
 
+### Package layout
+
+`stream_translator_gpt/` is organized by pipeline stage: `getter/` captures audio, `slicer/` handles VAD and
+segmentation, `transcriber/` transcribes, `translator/` translates, `exporter/` publishes results, and `utils/`
+holds shared helpers. `main.py` retains the CLI and pipeline assembly. Transcription filters and SimulStreaming
+live under `transcriber/`; the VAD model is bundled with `slicer/`. The independent top-level `utils/term_utils.py`
+and its `stream-translator-build-terms` command are unchanged.
+
 ### Translation architecture
 
-The default translation stack separates lifecycle (`translation_pipeline.py`), scheduling and ordered publication
-(`translation_scheduler.py`), request-worker loops (`translation_worker.py`), provider API calls
-(`translation_backends.py`), worker-owned clients (`translation_clients.py`), and prompt/result handling
-(`translation_protocol.py`). Components exchange immutable requests and results defined in `translation_types.py`;
+The default translation stack separates lifecycle (`translator/pipeline.py`), scheduling and ordered publication
+(`translator/scheduler.py`), request-worker loops (`translator/worker.py`), provider API calls
+(`translator/backends.py`), worker-owned clients (`translator/clients.py`), and prompt/result handling
+(`translator/protocol.py`). Components exchange immutable requests and results defined in `translator/types.py`;
 only the scheduler updates pipeline tasks. A worker never waits for context, output order, or retry backoff.
 
 `--use-old-translator` selects the complete, unchanged implementation from commit `ab314cf`, archived in
-`legacy_translator.py`. It does not import or use the new translation stack. Its original client pool, retry/timeout
+`translator/legacy/legacy_translator.py`. It does not import or use the new translation stack. Its original client pool, retry/timeout
 behavior and shutdown limitations remain unchanged: context mode is sequential, otherwise the limit is 10 concurrent
 requests. `--translation-threads` applies only to the new implementation.
 

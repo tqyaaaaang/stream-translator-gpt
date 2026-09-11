@@ -10,8 +10,8 @@ from unittest import mock
 
 import numpy as np
 
-from stream_translator_gpt.audio_getter import DeviceAudioGetter, _device_gain
-from stream_translator_gpt.common import SAMPLE_RATE, SAMPLES_PER_FRAME
+from stream_translator_gpt.getter.audio_getter import DeviceAudioGetter, _device_gain
+from stream_translator_gpt.utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME
 
 
 class _FakeStream:
@@ -90,7 +90,7 @@ def _make_getter(*,
     module.paComplete = 3
     module.paAbort = 4
     module.PyAudio = mock.Mock(return_value=instance)
-    with mock.patch('stream_translator_gpt.audio_getter.platform.system', return_value='Linux'):
+    with mock.patch('stream_translator_gpt.getter.audio_getter.platform.system', return_value='Linux'):
         with mock.patch.dict(sys.modules, {'pyaudio': module}):
             getter = DeviceAudioGetter(device_index=0,
                                        use_mic=True,
@@ -185,7 +185,7 @@ class PyAudioCallbackTest(unittest.TestCase):
         module = types.ModuleType('pyaudiowpatch')
         module.paWASAPI = 13
         module.PyAudio = mock.Mock(return_value=instance)
-        with mock.patch('stream_translator_gpt.audio_getter.platform.system', return_value='Windows'):
+        with mock.patch('stream_translator_gpt.getter.audio_getter.platform.system', return_value='Windows'):
             with mock.patch.dict(sys.modules, {'pyaudiowpatch': module}):
                 getter = DeviceAudioGetter(device_index=None, use_mic=False)
                 module.PyAudio.assert_not_called()
@@ -199,7 +199,7 @@ class PyAudioCallbackTest(unittest.TestCase):
         self.assertEqual(instance.terminated, 1)
 
     def test_zero_channel_metadata_keeps_legacy_two_channel_fallback(self):
-        with mock.patch('stream_translator_gpt.audio_getter.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.logger.warning') as warning:
             getter, instance, _ = _make_getter(channels=0)
             getter._initialize_pyaudio()
 
@@ -248,7 +248,7 @@ class PyAudioCallbackTest(unittest.TestCase):
             return instance
 
         module.PyAudio = create_pyaudio
-        with mock.patch('stream_translator_gpt.audio_getter.platform.system', return_value='Linux'):
+        with mock.patch('stream_translator_gpt.getter.audio_getter.platform.system', return_value='Linux'):
             with mock.patch.dict(sys.modules, {'pyaudio': module}):
                 getter = DeviceAudioGetter(device_index=0, use_mic=True)
 
@@ -277,7 +277,7 @@ class PyAudioCallbackTest(unittest.TestCase):
 
         # Supply the already-populated callback queue through the normal stream lifecycle.
         instance.blocks = [(b'', 0)]
-        with mock.patch('stream_translator_gpt.audio_getter.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.logger.warning') as warning:
             getter.loop(output_queue)
 
         output = _drain(output_queue)
@@ -304,7 +304,7 @@ class PyAudioCallbackTest(unittest.TestCase):
 
         self.assertEqual(queued, list(range(1, 9)))
         self.assertEqual(getter.dropped_blocks, 1)
-        with mock.patch('stream_translator_gpt.audio_getter.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.logger.warning') as warning:
             getter._log_dropped_blocks()
         warning.assert_called_once_with('PyAudio processing is behind; dropped %d queued audio block(s)', 1)
 
@@ -382,7 +382,7 @@ class PyAudioCallbackTest(unittest.TestCase):
                                            interval=SAMPLES_PER_FRAME / SAMPLE_RATE)
         output_queue = queue.SimpleQueue()
 
-        with mock.patch('stream_translator_gpt.audio_getter.logger.warning') as warning:
+        with mock.patch('stream_translator_gpt.getter.audio_getter.logger.warning') as warning:
             getter.loop(output_queue)
 
         output = _drain(output_queue)

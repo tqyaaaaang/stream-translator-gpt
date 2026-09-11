@@ -6,9 +6,9 @@ from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, replace
 from unittest import mock
 
-from stream_translator_gpt.common import TranslationTask
-from stream_translator_gpt.translation_scheduler import ParallelTranslationScheduler
-from stream_translator_gpt.translation_types import TranslationRequest, TranslationResult, TranslationSettings
+from stream_translator_gpt.utils.common import TranslationTask
+from stream_translator_gpt.translator.scheduler import ParallelTranslationScheduler
+from stream_translator_gpt.translator.types import TranslationRequest, TranslationResult, TranslationSettings
 
 
 class _Clock:

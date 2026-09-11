@@ -158,15 +158,23 @@ stream-translator-gpt {文件路径} --pacer realtime --use-modulate-transcripti
 - **Cqhttp**: ```stream-translator-gpt {网址} --language {输入语言} --cqhttp-url {你的 Cqhttp 地址} --cqhttp-token {你的 Cqhttp 令牌}```
 - **带时间戳的文本文件**：```stream-translator-gpt {网址} --language {输入语言} --translation-prompt "把{输入语言}翻译成{输出语言}" --google-api-key {你的 Google key} --no-show-transcribe-result --retry-if-translation-fails --output-file-path ./result.txt --output-file-timestamps```
 
+### 项目目录
+
+`stream_translator_gpt/` 按流水线阶段组织：`getter/` 获取音频，`slicer/` 做 VAD 与切片，
+`transcriber/` 转录，`translator/` 翻译，`exporter/` 输出，`utils/` 提供共用辅助功能。
+`main.py` 保留 CLI 和流水线组装。转录过滤器和 SimulStreaming 放在 `transcriber/` 内；
+切片器的模型资源随 `slicer/` 打包。顶层独立的 `utils/term_utils.py` 及
+`stream-translator-build-terms` 命令保持不变。
+
 ### 翻译模块职责
 
-默认翻译实现将流水线生命周期（`translation_pipeline.py`）、调度与有序发布（`translation_scheduler.py`）、
-请求工作线程循环（`translation_worker.py`）、供应商 API 调用（`translation_backends.py`）、线程独占的 client
-（`translation_clients.py`）以及 prompt 构造与结果解析（`translation_protocol.py`）分别实现。
-模块间通过 `translation_types.py` 定义的不可变请求和结果通信；只有调度器会修改流水线任务。
+默认翻译实现将流水线生命周期（`translator/pipeline.py`）、调度与有序发布（`translator/scheduler.py`）、
+请求工作线程循环（`translator/worker.py`）、供应商 API 调用（`translator/backends.py`）、线程独占的 client
+（`translator/clients.py`）以及 prompt 构造与结果解析（`translator/protocol.py`）分别实现。
+模块间通过 `translator/types.py` 定义的不可变请求和结果通信；只有调度器会修改流水线任务。
 工作线程不会等待 context、输出顺序或重试退避。
 
-`--use-old-translator` 选择 `legacy_translator.py` 中从 `ab314cf` 原封不动保留的完整历史实现，
+`--use-old-translator` 选择 `translator/legacy/legacy_translator.py` 中从 `ab314cf` 原封不动保留的完整历史实现，
 不导入或调用新翻译模块。其原有 client pool、重试、超时与退出方面的限制也保持不变：
 context 模式串行，否则最多 10 个并发请求。`--translation-threads` 只影响新实现。
 

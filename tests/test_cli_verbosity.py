@@ -2,7 +2,7 @@ import unittest
 
 import tyro
 
-from stream_translator_gpt.logging_utils import normalize_verbosity_args
+from stream_translator_gpt.utils.logging_utils import normalize_verbosity_args
 from stream_translator_gpt.main import Config
 
 

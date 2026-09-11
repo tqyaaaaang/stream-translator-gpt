@@ -6,7 +6,7 @@ from unittest import mock
 import numpy as np
 import tyro
 
-from stream_translator_gpt.audio_getter import SoundDeviceAudioGetter, _device_gain, _sounddevice_gain
+from stream_translator_gpt.getter.audio_getter import SoundDeviceAudioGetter, _device_gain, _sounddevice_gain
 from stream_translator_gpt.main import Config, _create_audio_getter, _validate_and_normalize
 
 

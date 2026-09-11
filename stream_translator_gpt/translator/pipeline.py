@@ -3,9 +3,9 @@
 import logging
 import threading
 
-from .common import LoopWorkerBase
-from .translation_scheduler import ParallelTranslationScheduler
-from .translation_types import TranslationBackend, TranslationSettings
+from ..utils.common import LoopWorkerBase
+from .scheduler import ParallelTranslationScheduler
+from .types import TranslationBackend, TranslationSettings
 
 
 logger = logging.getLogger('main')

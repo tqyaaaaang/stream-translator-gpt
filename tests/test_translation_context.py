@@ -10,8 +10,8 @@ from unittest import mock
 import numpy as np
 import tyro
 
-from stream_translator_gpt.common import ClientPool, TranslationTask
-from stream_translator_gpt.legacy_translator import (
+from stream_translator_gpt.utils.common import ClientPool, TranslationTask
+from stream_translator_gpt.translator.legacy.legacy_translator import (
     GeminiTranslator,
     GPTTranslator,
     LLMTranslator,
@@ -21,7 +21,7 @@ from stream_translator_gpt.legacy_translator import (
     _translation_context_target_min_chars,
 )
 from stream_translator_gpt.main import Config, _validate_and_normalize
-from stream_translator_gpt.result_exporter import ResultExporter, _format_translation_result
+from stream_translator_gpt.exporter.result_exporter import ResultExporter, _format_translation_result
 
 
 class _ContextTranslator(LLMTranslator):
@@ -304,7 +304,7 @@ class TranslationContextTest(unittest.TestCase):
         def publish():
             accepted.append(translator._apply_completion(task, 'response'))
 
-        with mock.patch('stream_translator_gpt.legacy_translator._parse_translation_context_completion',
+        with mock.patch('stream_translator_gpt.translator.legacy.legacy_translator._parse_translation_context_completion',
                         side_effect=blocked_parse):
             worker = threading.Thread(target=publish)
             worker.start()
@@ -541,7 +541,7 @@ class TranslationContextTest(unittest.TestCase):
                     input_queue.put(task)
                     input_queue.put(None)
 
-                    with mock.patch('stream_translator_gpt.result_exporter.write_console_utf8') as console_write:
+                    with mock.patch('stream_translator_gpt.exporter.result_exporter.write_console_utf8') as console_write:
                         exporter.loop(input_queue)
 
                     console_payload = console_write.call_args.args[0]

@@ -6,8 +6,8 @@ from dataclasses import FrozenInstanceError
 from unittest import mock
 
 from stream_translator_gpt import __version__
-from stream_translator_gpt.common import ClientPool
-from stream_translator_gpt.translation_clients import TranslationClientPool
+from stream_translator_gpt.utils.common import ClientPool
+from stream_translator_gpt.translator.clients import TranslationClientPool
 
 
 class TranslationWorkerClientsTest(unittest.TestCase):

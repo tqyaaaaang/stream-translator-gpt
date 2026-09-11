@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from .common import TranslationTask, LoopWorkerBase, sec2str, start_daemon_thread, BOLD, ENDC, write_console_utf8
+from ..utils.common import TranslationTask, LoopWorkerBase, sec2str, start_daemon_thread, BOLD, ENDC, write_console_utf8
 
 
 logger = logging.getLogger('main')

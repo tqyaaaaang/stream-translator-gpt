@@ -97,14 +97,21 @@ stream-translator-gpt /path/to/file --pacer realtime --use-modulate-transcriptio
 - **Cqhttp**: ```stream-translator-gpt {URL} --language {input_language} --cqhttp-url {your_cqhttp_url} --cqhttp-token {your_cqhttp_token}```
 - **Timestamped text file**: ```stream-translator-gpt {URL} --language {input_language} --translation-prompt "Translate from {input_language} to {output_language}" --google-api-key {your_google_key} --no-show-transcribe-result --retry-if-translation-fails --output-file-path ./result.txt --output-file-timestamps```
 
+### Package layout
+
+`stream_translator_gpt/` is organized into `getter/`, `slicer/` (VAD and segmentation), `transcriber/`,
+`translator/`, `exporter/`, and shared `utils/`. `main.py` retains the CLI and pipeline assembly.
+Transcription filters and SimulStreaming live under `transcriber/`; the VAD model is bundled with `slicer/`.
+The independent top-level `utils/term_utils.py` and its `stream-translator-build-terms` command are unchanged.
+
 ### Translation architecture
 
 The default implementation separates pipeline lifecycle, scheduling, request workers, API backends, worker-owned
-clients, and prompt/result handling into the `translation_pipeline`, `translation_scheduler`, `translation_worker`,
-`translation_backends`, `translation_clients`, and `translation_protocol` modules. Requests and results are immutable;
+clients, and prompt/result handling into the `translator.pipeline`, `translator.scheduler`, `translator.worker`,
+`translator.backends`, `translator.clients`, and `translator.protocol` modules. Requests and results are immutable;
 only the scheduler updates pipeline tasks. Workers never wait for context, output order, or retry backoff.
 
-`--use-old-translator` directly selects the unchanged `ab314cf` implementation archived in `legacy_translator.py`,
+`--use-old-translator` directly selects the unchanged `ab314cf` implementation archived in `translator/legacy/legacy_translator.py`,
 without importing the new stack. Original client-pool, retry/timeout and shutdown behavior is retained: context mode
 is sequential, otherwise the concurrency limit is 10. `--translation-threads` applies only to the new implementation.
 

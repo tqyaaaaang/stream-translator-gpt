@@ -8,8 +8,8 @@ import warnings
 
 import numpy as np
 
-from .common import TranslationTask, SAMPLE_RATE, FRAME_DURATION, LoopWorkerBase, LogTime, sec2str
-from .logging_utils import DDEBUG
+from ..utils.common import TranslationTask, SAMPLE_RATE, FRAME_DURATION, LoopWorkerBase, LogTime, sec2str
+from ..utils.logging_utils import DDEBUG
 
 warnings.filterwarnings('ignore')
 

@@ -1,3 +1,5 @@
+"""Shared logging configuration and redaction helpers."""
+
 import atexit
 import copy
 import logging

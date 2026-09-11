@@ -16,10 +16,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Any
 
-from .logging_utils import DDEBUG
-from .translation_clients import TranslationClientPool
-from .translation_protocol import TranslationProtocol, TranslationOutputMode, _TRANSLATION_CONTEXT_RESPONSE_FORMAT
-from .translation_types import TranslationRequest, TranslationResult
+from ..utils.logging_utils import DDEBUG
+from .clients import TranslationClientPool
+from .protocol import TranslationProtocol, TranslationOutputMode, _TRANSLATION_CONTEXT_RESPONSE_FORMAT
+from .types import TranslationRequest, TranslationResult
 
 logger = logging.getLogger('main')
 

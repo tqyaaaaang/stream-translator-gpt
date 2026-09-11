@@ -17,7 +17,7 @@ import platformdirs
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from stream_translator_gpt import __version__
-from stream_translator_gpt.logging_utils import (configure_logging, normalize_verbosity_args, redact_command,
+from stream_translator_gpt.utils.logging_utils import (configure_logging, normalize_verbosity_args, redact_command,
                                                  shutdown_logging, verbosity_from_argv)
 from webui.process_utils import build_utf8_subprocess_env, popen_utf8, run_utf8
 

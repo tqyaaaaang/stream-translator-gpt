@@ -5,9 +5,9 @@ from unittest import mock
 
 import numpy as np
 
-from stream_translator_gpt.audio_slicer import AudioSlicer
-from stream_translator_gpt.common import LogTime, TranslationTask
-from stream_translator_gpt.logging_utils import DDEBUG, configure_logging, shutdown_logging
+from stream_translator_gpt.slicer.audio_slicer import AudioSlicer
+from stream_translator_gpt.utils.common import LogTime, TranslationTask
+from stream_translator_gpt.utils.logging_utils import DDEBUG, configure_logging, shutdown_logging
 
 
 class TimingTest(unittest.TestCase):
@@ -19,7 +19,7 @@ class TimingTest(unittest.TestCase):
         output = io.StringIO()
         configure_logging(1, stream=output)
 
-        with mock.patch('stream_translator_gpt.common.time.perf_counter', side_effect=[10.0, 10.125]):
+        with mock.patch('stream_translator_gpt.utils.common.time.perf_counter', side_effect=[10.0, 10.125]):
             with LogTime('Processed task %d', 4):
                 pass
         shutdown_logging()
@@ -29,7 +29,7 @@ class TimingTest(unittest.TestCase):
     def test_log_time_skips_clock_when_level_is_disabled(self):
         configure_logging(0, stream=io.StringIO())
 
-        with mock.patch('stream_translator_gpt.common.time.perf_counter') as perf_counter:
+        with mock.patch('stream_translator_gpt.utils.common.time.perf_counter') as perf_counter:
             with LogTime('hidden', level=logging.INFO):
                 pass
 
@@ -50,14 +50,14 @@ class TimingTest(unittest.TestCase):
         timer = mock.MagicMock()
         timer.__enter__.return_value = timer
 
-        with mock.patch('stream_translator_gpt.audio_slicer.LogTime', return_value=timer) as log_time:
+        with mock.patch('stream_translator_gpt.slicer.audio_slicer.LogTime', return_value=timer) as log_time:
             slicer.put(np.zeros(512, dtype=np.float32))
 
         log_time.assert_called_once_with('', level=DDEBUG)
         timer.set_log.assert_called_once_with('VAD evaluated block %d with speech probability %.4f', 1, 0.9)
 
     def test_translation_wrapper_logs_task_id(self):
-        from stream_translator_gpt.legacy_translator import LLMTranslator
+        from stream_translator_gpt.translator.legacy.legacy_translator import LLMTranslator
 
         class FakeTranslator(LLMTranslator):
 
@@ -69,7 +69,7 @@ class TimingTest(unittest.TestCase):
         timer = mock.MagicMock()
         timer.__enter__.return_value = timer
 
-        with mock.patch('stream_translator_gpt.legacy_translator.LogTime', return_value=timer) as log_time:
+        with mock.patch('stream_translator_gpt.translator.legacy.legacy_translator.LogTime', return_value=timer) as log_time:
             translator._translate_with_timing(task)
 
         log_time.assert_called_once_with('Translated task %d', 9)
