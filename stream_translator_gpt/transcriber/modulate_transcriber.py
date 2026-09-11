@@ -756,7 +756,12 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                                          if response_headers is not None else None)
                 logger.debug('Modulate WebSocket connected; remote_address=%s, negotiated_extensions=%s',
                              getattr(websocket, 'remote_address', None), negotiated_extensions or 'none')
-                websocket.send(json.dumps(self._connection_config(), ensure_ascii=False))
+                connection_config = self._connection_config()
+                if logger.isEnabledFor(logging.DEBUG):
+                    custom_terms = connection_config.get('custom_terms', [])
+                    logger.debug('Modulate custom terms (%d): %s', len(custom_terms),
+                                 json.dumps(custom_terms, ensure_ascii=False))
+                websocket.send(json.dumps(connection_config, ensure_ascii=False))
                 response_started_at = time.monotonic()
                 sender_thread = threading.Thread(
                     target=self._send_audio,

@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import queue
 import ssl
@@ -411,6 +412,80 @@ class ModulateProtocolTest(unittest.TestCase):
             'language': 'ja',
             'custom_terms': ['Modulate', 'Velma'],
         })
+
+    def test_custom_terms_debug_log_matches_sent_japanese_array_without_credentials(self):
+        websocket = _FakeWebSocket([{'type': 'done', 'duration_ms': 32}])
+        transcriber = _transcriber(
+            connector=lambda *_args, **_kwargs: websocket,
+            transcription_keywords=' 結城さくな, 神楽めあ, クリオネ , ,',
+        )
+
+        with self.assertLogs('main', level='DEBUG') as captured:
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
+
+        records = [record for record in captured.records
+                   if record.getMessage().startswith('Modulate custom terms (')]
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        terms = json.loads(websocket.sent[0])['custom_terms']
+        self.assertEqual(terms, ['結城さくな', '神楽めあ', 'クリオネ'])
+        self.assertEqual(record.levelno, logging.DEBUG)
+        self.assertEqual(record.args[0], len(terms))
+        self.assertEqual(json.loads(record.args[1]), terms)
+        self.assertIn('結城さくな', record.getMessage())
+        self.assertNotIn('\\u', record.getMessage())
+        self.assertNotIn(transcriber.api_key, '\n'.join(captured.output))
+        self.assertNotIn('api_key', record.getMessage())
+        self.assertNotIn('speaker_diarization', record.getMessage())
+
+    def test_custom_terms_debug_log_is_emitted_for_each_reconnection(self):
+        first = _FakeWebSocket(receive_error=_websocket_close(1006))
+        second = _FakeWebSocket([{'type': 'done', 'duration_ms': 32}])
+        connector = mock.Mock(side_effect=[first, second])
+        transcriber = _transcriber(
+            connector=connector, reconnect_attempts=1, sleeper=lambda _: None,
+            transcription_keywords='結城さくな,神楽めあ',
+        )
+
+        with self.assertLogs('main', level='DEBUG') as captured:
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
+
+        records = [record for record in captured.records
+                   if record.getMessage().startswith('Modulate custom terms (')]
+        self.assertEqual(connector.call_count, 2)
+        self.assertEqual(len(records), 2)
+        for record, websocket in zip(records, (first, second)):
+            terms = json.loads(websocket.sent[0])['custom_terms']
+            self.assertEqual(record.args[0], len(terms))
+            self.assertEqual(json.loads(record.args[1]), terms)
+
+    def test_empty_custom_terms_debug_log_reports_zero_and_empty_array(self):
+        websocket = _FakeWebSocket([{'type': 'done', 'duration_ms': 32}])
+        transcriber = _transcriber(connector=lambda *_args, **_kwargs: websocket)
+
+        with self.assertLogs('main', level='DEBUG') as captured:
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
+
+        messages = [record.getMessage() for record in captured.records
+                    if record.getMessage().startswith('Modulate custom terms (')]
+        self.assertEqual(messages, ['Modulate custom terms (0): []'])
+        self.assertNotIn('custom_terms', json.loads(websocket.sent[0]))
+
+    def test_custom_terms_are_not_logged_at_info_level(self):
+        websocket = _FakeWebSocket([{'type': 'done', 'duration_ms': 32}])
+        transcriber = _transcriber(
+            connector=lambda *_args, **_kwargs: websocket,
+            transcription_keywords='結城さくな,神楽めあ',
+        )
+
+        with self.assertLogs('main', level='INFO') as captured:
+            transcriber.loop(_audio_input_queue(), queue.SimpleQueue())
+
+        self.assertEqual(json.loads(websocket.sent[0])['custom_terms'], ['結城さくな', '神楽めあ'])
+        logs = '\n'.join(captured.output)
+        self.assertNotIn('Modulate custom terms', logs)
+        self.assertNotIn('結城さくな', logs)
+        self.assertNotIn(transcriber.api_key, logs)
 
     def test_auto_language_is_omitted_for_server_side_detection(self):
         transcriber = _transcriber(language='auto')
