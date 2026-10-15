@@ -20,7 +20,7 @@ import ffmpeg
 import numpy as np
 from scipy.signal import resample
 
-from .time_range import format_seconds, normalize_time_range
+from .time_range import ffmpeg_time_range_options, format_seconds, is_local_hls, normalize_time_range
 from ..utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME, LoopWorkerBase
 from ..utils.logging_utils import redact_url
 
@@ -153,20 +153,34 @@ def _put_audio_block(output_queue, audio: np.ndarray, stop_event: threading.Even
     return False
 
 
-def _signal_end_of_stream(output_queue, *, discard_buffered: bool = False) -> None:
+def _signal_end_of_stream(output_queue,
+                          *,
+                          discard_buffered: bool = False,
+                          stop_event: threading.Event | None = None) -> None:
     """Publish one terminal sentinel without blocking a cancelled bounded producer."""
-    if discard_buffered:
-        # Once downstream has failed or cancellation was requested, queued audio
-        # is no longer useful. Make room for EOF so shutdown cannot deadlock on
-        # the bounded Modulate input queue.
-        while True:
+    while True:
+        if discard_buffered or (stop_event is not None and stop_event.is_set()):
+            # Recheck cancellation even if natural EOF was already waiting for
+            # queue space when the downstream consumer stopped. A one-time
+            # check followed by blocking put(None) can deadlock on shutdown.
+            while True:
+                try:
+                    output_queue.get_nowait()
+                except queue.Empty:
+                    break
             try:
-                output_queue.get_nowait()
-            except queue.Empty:
-                break
-        output_queue.put_nowait(None)
-        return
-    output_queue.put(None)
+                output_queue.put_nowait(None)
+                return
+            except queue.Full:
+                continue
+        try:
+            if stop_event is None:
+                output_queue.put(None)
+            else:
+                output_queue.put(None, timeout=0.1)
+            return
+        except queue.Full:
+            continue
 
 
 def _wake_recording_queue(recording_queue, *, discard_buffered: bool) -> None:
@@ -411,21 +425,25 @@ def _open_stream(url: str,
         cmd.extend(['--wait-for-video', str(wait_for_video)])
     if live_from_start:
         cmd.append('--live-from-start')
-    if ss is not None or to is not None:
-        start = format_seconds(ss) if ss is not None else '0'
-        end = format_seconds(to) if to is not None else 'inf'
-        # Let yt-dlp's downloader own both boundaries. Truncating the decoded
-        # pipe downstream would close ffmpeg before yt-dlp finishes, turning a
-        # successful finite section into an apparent transport failure.
-        cmd.extend(['--download-sections', f'*{start}-{end}'])
-        # Section downloads use yt-dlp's FFmpeg downloader. Decode there so
-        # FFmpeg can apply input seeking, then use a pipe-friendly container. This
-        # also avoids non-seekable m4a output and AAC-in-HLS remux failures.
-        cmd.extend(['--downloader-args', f'ffmpeg_o:-vn -c:a pcm_f32le -ar {SAMPLE_RATE} -ac 1 -f matroska'])
     if cookies:
         cmd.extend(['--cookies', cookies])
     if proxy:
         cmd.extend(['--proxy', proxy])
+    process_options = {}
+    if ss is not None or to is not None:
+        # Select seek options after extraction, using the chosen media protocol
+        # rather than guessing from the page URL. The wrapper owns both range
+        # boundaries, so the downstream decoder still sees a normal EOF.
+        cmd = [sys.executable, '-m', 'stream_translator_gpt.getter.range_downloader',
+               format_seconds(ss) if ss is not None else '',
+               format_seconds(to) if to is not None else '', '--', *cmd[3:]]
+        # The downloader runs in a private temp directory. Keep source-checkout
+        # launches working even when this package is not installed into Python.
+        environment = os.environ.copy()
+        package_root = str(Path(__file__).resolve().parents[2])
+        existing_path = environment.get('PYTHONPATH')
+        environment['PYTHONPATH'] = package_root + (os.pathsep + existing_path if existing_path else '')
+        process_options['env'] = environment
     started_at = time.monotonic()
     stats = _StreamTransportStats(started_at=started_at, format_diagnostic_path=format_diagnostic_path)
     # Live HLS extractors can spawn an internal ffmpeg downloader. On POSIX,
@@ -435,7 +453,8 @@ def _open_stream(url: str,
                                      stdout=subprocess.PIPE,
                                      stderr=None,
                                      cwd=cwd,
-                                     start_new_session=os.name != 'nt')
+                                     start_new_session=os.name != 'nt',
+                                     **process_options)
 
     try:
         # Keep stderr inherited: media remains isolated on stdout, while ffmpeg
@@ -610,7 +629,8 @@ class StreamAudioGetter(LoopWorkerBase):
         finally:
             try:
                 _signal_end_of_stream(output_queue,
-                                      discard_buffered=self.stop_event.is_set() or not completed)
+                                      discard_buffered=self.stop_event.is_set() or not completed,
+                                      stop_event=self.stop_event)
             finally:
                 try:
                     if not completed:
@@ -671,14 +691,12 @@ class LocalFileAudioGetter(LoopWorkerBase):
         failed = False
         try:
             try:
-                input_options = {'loglevel': 'panic'}
-                output_options = {}
-                if self.ss is not None:
-                    input_options['ss'] = format_seconds(self.ss)
-                if self.to is not None:
-                    # With input seeking, ffmpeg resets output timestamps;
-                    # express the absolute source endpoint as a duration.
-                    output_options['t'] = format_seconds(self.to - (self.ss or 0))
+                has_range = self.ss is not None or self.to is not None
+                linear_seek = has_range and (Path(self.file_path).suffix.lower() in ('.ts', '.mpegts')
+                                             or is_local_hls(self.file_path))
+                input_options, output_options = ffmpeg_time_range_options(
+                    self.ss, self.to, linear=linear_seek)
+                input_options['loglevel'] = 'panic'
                 self.ffmpeg_process = (ffmpeg.input(self.file_path,
                                                     **input_options).output('pipe:',
                                                                              format='f32le',
@@ -721,7 +739,8 @@ class LocalFileAudioGetter(LoopWorkerBase):
             raise
         finally:
             try:
-                _signal_end_of_stream(output_queue, discard_buffered=self.stop_event.is_set() or failed)
+                _signal_end_of_stream(output_queue, discard_buffered=self.stop_event.is_set() or failed,
+                                      stop_event=self.stop_event)
             finally:
                 self.finished.set()
 
@@ -901,7 +920,8 @@ class SoundDeviceAudioGetter(LoopWorkerBase):
             self.stream = None
             try:
                 _signal_end_of_stream(output_queue,
-                                      discard_buffered=self.cancel_requested.is_set() or failed)
+                                      discard_buffered=self.cancel_requested.is_set() or failed,
+                                      stop_event=self.cancel_requested)
             finally:
                 try:
                     if self.debug_dumper is not None:
@@ -1291,7 +1311,8 @@ class DeviceAudioGetter(LoopWorkerBase):
             self.stopping.set()
             try:
                 _signal_end_of_stream(output_queue,
-                                      discard_buffered=self.cancel_requested.is_set() or failed)
+                                      discard_buffered=self.cancel_requested.is_set() or failed,
+                                      stop_event=self.cancel_requested)
             finally:
                 try:
                     self._cleanup()

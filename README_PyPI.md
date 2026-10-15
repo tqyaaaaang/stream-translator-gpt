@@ -63,9 +63,10 @@ Use `--ss TIME` / `--to TIME` to process a source interval, for example
 `stream-translator-gpt recording.mp3 --ss 00:10:00 --to 00:12:00` (two minutes).
 These are FFmpeg-style positions: `--to` is the absolute end, not a duration. Both options are optional;
 times must be non-negative seconds or `[HH:]MM:SS[.fraction]` (seconds also accept `s`, `ms`, `us`).
-Local files seek before decoding; URL inputs use yt-dlp section downloads and FFmpeg input seeking to avoid
-reading/downloading the entire preceding media where supported. Remote servers, media indexing, and live DVR
-availability determine how much data can be skipped; some extra data around seek points may be needed.
+Seekable files and direct media URLs use an early seek with a short pre-roll, followed by precise trimming.
+URL inputs use yt-dlp's FFmpeg downloader. HLS playlists use linear decoding before trimming to handle segment
+boundaries and timestamp discontinuities correctly; this reads the preceding audio and can take longer to start.
+For other formats, servers, media indexing, and live DVR availability determine how much data can be skipped.
 Output timestamps start at zero for the selected interval. Device input and `--live-from-start` warn and ignore
 both options. `--pacer` works independently of the selected interval.
 

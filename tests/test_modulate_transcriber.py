@@ -1512,9 +1512,12 @@ class ModulateConfigTest(unittest.TestCase):
         expected_chunks = math.ceil(MODULATE_INPUT_QUEUE_SECONDS * SAMPLE_RATE / SAMPLES_PER_FRAME)
         self.assertEqual(expected_chunks, 18750)
         self.assertEqual(getter_queue.maxsize, expected_chunks)
-        expected_signals = [mock.call(main.signal.SIGINT, fake_getter._exit_handler)]
+        stop_handler = register_signal.call_args_list[0].args[1]
+        self.assertTrue(callable(stop_handler))
+        self.assertIsNot(stop_handler, fake_getter._exit_handler)
+        expected_signals = [mock.call(main.signal.SIGINT, stop_handler)]
         if hasattr(main.signal, 'SIGTERM'):
-            expected_signals.append(mock.call(main.signal.SIGTERM, fake_getter._exit_handler))
+            expected_signals.append(mock.call(main.signal.SIGTERM, stop_handler))
         register_signal.assert_has_calls(expected_signals)
 
 

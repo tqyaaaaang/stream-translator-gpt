@@ -621,11 +621,6 @@ def run(config: Config):
         exporter = exporter_future.result()
         logger.debug('All pipeline workers initialized')
 
-    if hasattr(audio_getter, '_exit_handler'):
-        signal.signal(signal.SIGINT, audio_getter._exit_handler)
-        if hasattr(signal, 'SIGTERM'):
-            signal.signal(signal.SIGTERM, audio_getter._exit_handler)
-
     logger.warning('Initialization complete, starting up...')
 
     # Start working
@@ -642,17 +637,48 @@ def run(config: Config):
         if callable(stop):
             stop()
 
+    def stop_transcription():
+        stop = getattr(transcriber, 'stop', None)
+        if callable(stop):
+            stop()
+
     def stop_pipeline():
-        # Wake a scheduler waiting for context/retry before interrupting input.
-        # Neither operation waits for a translation's network request to finish.
+        # Cancel network/context waits before the getter publishes EOF. Otherwise
+        # a cancelled, still-priming transcriber can mistake EOF for a bad source.
         try:
             stop_translation()
         finally:
-            stop_audio_getter()
+            try:
+                stop_transcription()
+            finally:
+                stop_audio_getter()
+
+    stopping_from_signal = False
+
+    def handle_stop_signal(signum, frame):
+        nonlocal stopping_from_signal
+        if stopping_from_signal:
+            # Don't re-enter stop() locks if a second signal interrupts cleanup.
+            raise SystemExit(0 if signum == signal.SIGINT else 128 + int(signum))
+        stopping_from_signal = True
+        # Preserve each getter's platform-specific cleanup and exit status, but
+        # wake downstream network waits before its potentially blocking cleanup.
+        try:
+            stop_translation()
+        finally:
+            try:
+                stop_transcription()
+            finally:
+                audio_getter._exit_handler(signum, frame)
 
     def handle_worker_error():
         pipeline_failed.set()
         stop_pipeline()
+
+    if hasattr(audio_getter, '_exit_handler'):
+        signal.signal(signal.SIGINT, handle_stop_signal)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, handle_stop_signal)
 
     try:
         getter_thread = start_daemon_thread(
@@ -672,13 +698,14 @@ def run(config: Config):
                 input_queue=getter_to_slicer_queue,
                 output_queue=slicer_to_transcriber_queue,
             ))
-        pipeline_threads.append(start_daemon_thread(
+        transcriber_thread = start_daemon_thread(
             transcriber.loop,
             name='transcriber',
             on_error=handle_worker_error,
             input_queue=(getter_to_slicer_queue if config.use_modulate_transcription_api else slicer_to_transcriber_queue),
             output_queue=transcriber_to_translator_queue,
-        ))
+        )
+        pipeline_threads.append(transcriber_thread)
         translator_thread = None
         if translator:
             translator_thread = start_daemon_thread(
@@ -703,13 +730,16 @@ def run(config: Config):
         while exporter_thread.is_alive():
             time.sleep(1)
         input_running = getter_thread.is_alive()
+        transcription_running = transcriber_thread.is_alive()
         translation_running = translator_thread is not None and translator_thread.is_alive()
         output_finished = getattr(translator, 'output_finished', None)
         translation_output_finished = output_finished is not None and output_finished.is_set()
-        if input_running or (translation_running and not translation_output_finished):
+        if input_running or transcription_running or (translation_running and not translation_output_finished):
             logger.debug('Exporter stopped before its upstream workers; requesting pipeline shutdown')
             if translation_running and not translation_output_finished:
                 stop_translation()
+            if transcription_running:
+                stop_transcription()
             if input_running:
                 stop_audio_getter()
     except BaseException:

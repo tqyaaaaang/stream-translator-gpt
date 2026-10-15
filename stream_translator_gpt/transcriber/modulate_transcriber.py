@@ -349,7 +349,13 @@ class ModulateStreamingTranscriber(AudioTranscriber):
         self.reconnect_backoff_seconds = float(reconnect_backoff_seconds)
         self.partial_splitter = PartialUtteranceSplitter(partial_cutoff_seconds, clock=clock)
         self.connector = connector
-        self.sleeper = sleeper or time.sleep
+        # The default backoff must wake immediately when the pipeline stops.
+        # Keep the injected sleeper for deterministic retry tests.
+        self.sleeper = sleeper
+        self._stop_event = threading.Event()
+        self._connection_lock = threading.Lock()
+        self._active_websocket = None
+        self._sender_stop_event = None
         self.task_count = 0
         self.last_task_end = 0.0
         self.active_segment_start = None
@@ -359,6 +365,34 @@ class ModulateStreamingTranscriber(AudioTranscriber):
         self._seen_final_uuid_order = deque(maxlen=1024)
         self._partial_progress_seen = set()
         self._partial_progress_order = deque(maxlen=4096)
+
+    def stop(self):
+        """Cancel this transcriber's I/O without waiting for a server response.
+
+        State publication and cancellation share a lock, but socket shutdown
+        never holds it (nor the WebSocket send mutex). A connection that finishes
+        opening after cancellation is interrupted by its registering thread.
+        """
+        with self._connection_lock:
+            if self._stop_event.is_set():
+                return
+            self._stop_event.set()
+            websocket = self._active_websocket
+            self._active_websocket = None
+            sender_stop_event = self._sender_stop_event
+        if sender_stop_event is not None:
+            sender_stop_event.set()
+        if websocket is not None:
+            self._interrupt_websocket(websocket)
+
+    def _register_websocket(self, websocket) -> bool:
+        with self._connection_lock:
+            cancelled = self._stop_event.is_set()
+            if not cancelled:
+                self._active_websocket = websocket
+        if cancelled:
+            self._interrupt_websocket(websocket)
+        return not cancelled
 
     def transcribe(self, audio: np.ndarray, history_context: str | None = None) -> tuple[str, list | None]:
         raise NotImplementedError('Modulate transcription operates on a continuous stream')
@@ -523,8 +557,10 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                          output_queue, progress_event: threading.Event,
                          send_progress: _AudioSendProgress, response_started_at: float) -> bool:
         first_message = True
-        while True:
+        while not self._stop_event.is_set():
             message = websocket.recv()
+            if self._stop_event.is_set():
+                return False
             if not isinstance(message, str):
                 raise ModulateStreamingError('Modulate returned an unexpected binary message')
             try:
@@ -568,6 +604,7 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                 raise ModulateStreamingError(f'Modulate API error: {safe_error}')
             else:
                 logger.debug('Ignoring unknown Modulate message type: %s', message_type)
+        return False
 
     @staticmethod
     def _transport_diagnostic(exc: BaseException) -> str:
@@ -656,6 +693,8 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                  if self.max_audio_send_rate is not None else None)
 
         def send_payload(payload: bytes, source: str) -> bool:
+            if stop_event.is_set():
+                return False
             if pacer is not None and not pacer.wait_until_ready():
                 return False
             websocket.send(payload)
@@ -682,6 +721,8 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                 # acknowledged payloads alive for the rest of the connection.
                 replay_payloads.clear()
 
+            if stop_event.is_set():
+                return
             if replay_reaches_eof:
                 websocket.send('')
                 return
@@ -691,8 +732,12 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                     audio = input_queue.get(timeout=0.2)
                 except queue.Empty:
                     continue
+                if self._stop_event.is_set():
+                    return
                 if audio is None:
                     stream_state.mark_eof()
+                    if stop_event.is_set():
+                        return
                     websocket.send('')
                     return
 
@@ -719,6 +764,39 @@ class ModulateStreamingTranscriber(AudioTranscriber):
             connector = connect
         return connector(self._connection_url(), **self._connection_kwargs())
 
+    def _connect_interruptibly(self):
+        """Let cancellation finish even during a blocking DNS/TLS handshake.
+
+        The SDK bounds a handshake with open_timeout, but it cannot expose the
+        socket before connect() returns. The daemon owns that pending attempt;
+        registering the result guarantees even a late connection gets closed.
+        """
+        if self._stop_event.is_set():
+            return None
+        result = queue.SimpleQueue()
+
+        def establish():
+            if self._stop_event.is_set():
+                return
+            try:
+                connection = self._connect()
+            except Exception as exc:
+                result.put((None, exc))
+                return
+            if self._register_websocket(connection):
+                result.put((connection, None))
+
+        threading.Thread(target=establish, name='modulate-connect', daemon=True).start()
+        while not self._stop_event.is_set():
+            try:
+                connection, error = result.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if error is not None:
+                raise error
+            return connection
+        return None
+
     def _run_connection(self, input_queue, output_queue, stream_state: _AudioStreamState):
         stop_event = threading.Event()
         sender_errors = queue.SimpleQueue()
@@ -727,6 +805,7 @@ class ModulateStreamingTranscriber(AudioTranscriber):
         done_received = False
         progress_event = threading.Event()
         send_progress = _AudioSendProgress()
+        connection = None
 
         replay_start, replay_payloads, replay_reaches_eof = stream_state.replay_snapshot()
         connection_offset = replay_start / SAMPLE_RATE
@@ -741,15 +820,23 @@ class ModulateStreamingTranscriber(AudioTranscriber):
             logger.debug('All Modulate audio was acknowledged before disconnect; skipping an empty reconnect')
             return
 
+        with self._connection_lock:
+            if self._stop_event.is_set():
+                return
+            self._sender_stop_event = stop_event
         try:
             try:
-                connection = self._connect()
+                connection = self._connect_interruptibly()
+                if connection is None:
+                    return
             except Exception as exc:
                 raise ModulateStreamingError(
                     f'Failed to connect to Modulate streaming API ({self._transport_error_label(exc)})',
                     retryable=self._transport_retryability(exc) is True) from None
 
             with connection as websocket:
+                if not self._register_websocket(websocket):
+                    return
                 response = getattr(websocket, 'response', None)
                 response_headers = getattr(response, 'headers', None)
                 negotiated_extensions = (response_headers.get('Sec-WebSocket-Extensions')
@@ -782,6 +869,8 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                         self._interrupt_websocket(websocket)
                     sender_thread.join(timeout=5)
 
+            if self._stop_event.is_set():
+                return
             sender_stuck = sender_thread is not None and sender_thread.is_alive()
             try:
                 sender_error_label, sender_error_retryable = sender_errors.get_nowait()
@@ -815,21 +904,34 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                 raise ModulateStreamingError('Modulate streaming connection ended before the done message',
                                              retryable=True)
         except ModulateStreamingError as exc:
+            if self._stop_event.is_set():
+                return
             exc.made_progress = exc.made_progress or progress_event.is_set()
             raise
         except Exception as exc:
+            if self._stop_event.is_set():
+                return
             raise ModulateStreamingError(
                 f'Modulate streaming connection failed ({self._transport_error_label(exc)})',
                 retryable=self._transport_retryability(exc) is True,
                 made_progress=progress_event.is_set()) from None
+        finally:
+            with self._connection_lock:
+                if self._sender_stop_event is stop_event:
+                    self._active_websocket = None
+                    self._sender_stop_event = None
 
-    @staticmethod
-    def _prime_stream(input_queue, stream_state: _AudioStreamState):
+    def _prime_stream(self, input_queue, stream_state: _AudioStreamState) -> bool:
         """Buffer the first usable block so a WebSocket never opens without audio ready."""
         logger.debug('Waiting for initial Modulate audio before opening the streaming connection')
         empty_blocks = 0
-        while True:
-            audio = input_queue.get()
+        while not self._stop_event.is_set():
+            try:
+                audio = input_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if self._stop_event.is_set():
+                return False
             if audio is None:
                 stream_state.mark_eof()
                 raise ModulateStreamingError(
@@ -846,19 +948,23 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                 raise ModulateStreamingError('Invalid initial audio from upstream (non-finite samples)')
             logger.debug('Buffered initial Modulate audio; bytes=%d, samples=%d, skipped_empty_blocks=%d',
                          len(payload), sample_count, empty_blocks)
-            return
+            return True
+        return False
 
-    def loop(self, input_queue, output_queue):
+    def _run_stream(self, input_queue, output_queue):
         stream_state = _AudioStreamState()
-        self._prime_stream(input_queue, stream_state)
+        if not self._prime_stream(input_queue, stream_state):
+            return
         logger.info('Connecting to Modulate streaming endpoint; proxy=%s, verify_ssl=%s', bool(self.proxy),
                     self.verify_ssl)
         retry_count = 0
-        while True:
+        while not self._stop_event.is_set():
             try:
                 self._run_connection(input_queue, output_queue, stream_state)
                 break
             except ModulateStreamingError as exc:
+                if self._stop_event.is_set():
+                    break
                 if exc.made_progress:
                     retry_count = 0
                 if not exc.retryable or retry_count >= self.reconnect_attempts:
@@ -867,6 +973,17 @@ class ModulateStreamingTranscriber(AudioTranscriber):
                 delay = min(self.reconnect_backoff_seconds * (2**(retry_count - 1)), 30.0)
                 logger.warning('Modulate connection interrupted; reconnecting (%d/%d) in %.1f seconds', retry_count,
                                self.reconnect_attempts, delay)
-                self.sleeper(delay)
+                if self.sleeper is not None:
+                    self.sleeper(delay)
+                else:
+                    self._stop_event.wait(delay)
 
+    def loop(self, input_queue, output_queue):
+        try:
+            self._run_stream(input_queue, output_queue)
+        except Exception:
+            if not self._stop_event.is_set():
+                # The worker wrapper reports a real failure and owns its EOF.
+                raise
+        # Natural completion and explicit cancellation each publish one EOF.
         output_queue.put(None)

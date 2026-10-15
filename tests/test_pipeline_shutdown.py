@@ -30,6 +30,8 @@ class PipelineShutdownTest(unittest.TestCase):
                 output_queue.put(None)
 
         class Transcriber:
+            stop = mock.Mock()
+
             def loop(self, input_queue, output_queue):
                 while (item := input_queue.get(timeout=2)) is not None:
                     output_queue.put(item)
@@ -55,11 +57,149 @@ class PipelineShutdownTest(unittest.TestCase):
                 while (item := input_queue.get(timeout=2)) is not None:
                     self.items.append(item)
 
-        getter, translator, exporter = Getter(), Translator(), Exporter()
-        with self._pipeline(getter, Transcriber(), translator, exporter) as config:
+        getter, transcriber, translator, exporter = Getter(), Transcriber(), Translator(), Exporter()
+        with self._pipeline(getter, transcriber, translator, exporter) as config:
             main.run(config)
         self.assertEqual(exporter.items, ['translated source'])
         translator.stop.assert_not_called()
+        transcriber.stop.assert_not_called()
+
+    def test_early_exporter_exit_cancels_transcriber_still_waiting_after_audio_eof(self):
+        class Getter:
+            def loop(self, output_queue):
+                output_queue.put(None)
+
+        class Transcriber:
+            def __init__(self):
+                self.audio_finished = threading.Event()
+                self.cancelled = threading.Event()
+                self.finished = threading.Event()
+
+            def loop(self, input_queue, output_queue):
+                self.output = output_queue
+                self.received = input_queue.get(timeout=2)
+                self.audio_finished.set()
+                try:
+                    if not self.cancelled.wait(timeout=3):
+                        raise AssertionError('transcriber was left waiting for the server')
+                finally:
+                    output_queue.put(None)
+                    self.finished.set()
+
+            def stop(self):
+                self.cancelled.set()
+
+        transcriber = Transcriber()
+
+        class Exporter:
+            def loop(self, input_queue):
+                if not transcriber.audio_finished.wait(timeout=2):
+                    raise AssertionError('transcriber did not receive audio EOF')
+
+        with self._pipeline(Getter(), transcriber, None, Exporter()) as config:
+            config.translation_prompt = None
+            main.run(config)
+        self.assertIsNone(transcriber.received)
+        self.assertTrue(transcriber.finished.is_set())
+        self.assertTrue(transcriber.cancelled.is_set())
+        self.assertIsNone(transcriber.output.get_nowait())
+        self.assertTrue(transcriber.output.empty())
+
+    def test_signal_cancels_priming_transcriber_before_getter_publishes_eof(self):
+        for signum in (main.signal.SIGINT, main.signal.SIGTERM):
+            with self.subTest(signum=signum):
+                class Transcriber:
+                    def __init__(self):
+                        self.started = threading.Event()
+                        self.cancelled = threading.Event()
+
+                    def stop(self):
+                        self.cancelled.set()
+
+                    def loop(self, input_queue, output_queue):
+                        self.started.set()
+                        input_queue.get(timeout=2)
+                        if not self.cancelled.is_set():
+                            raise AssertionError('source EOF arrived before transcription cancellation')
+                        output_queue.put(None)
+
+                transcriber = Transcriber()
+
+                class Getter:
+                    def __init__(self):
+                        self.cancelled = threading.Event()
+                        self.finished = threading.Event()
+
+                    def loop(self, output_queue):
+                        if not self.cancelled.wait(timeout=2):
+                            raise AssertionError('getter was not stopped')
+                        output_queue.put(None)
+                        self.finished.set()
+
+                    def stop(self):
+                        self.cancelled.set()
+
+                    def _exit_handler(self, received, frame):
+                        if not transcriber.cancelled.is_set():
+                            raise AssertionError('getter signal handler ran before transcriber.stop()')
+                        self.stop()
+                        if not self.finished.wait(timeout=2):
+                            raise AssertionError('getter did not finish')
+                        raise SystemExit(0 if received == main.signal.SIGINT else 128 + int(received))
+
+                class Exporter:
+                    def loop(self, input_queue):
+                        input_queue.get(timeout=2)
+
+                handlers = {}
+
+                def deliver_signal(_):
+                    self.assertTrue(transcriber.started.wait(timeout=2))
+                    handlers[signum](signum, None)
+
+                with self._pipeline(Getter(), transcriber, None, Exporter()) as config, \
+                        mock.patch.object(main.signal, 'signal', side_effect=lambda sig, fn: handlers.update({sig: fn})), \
+                        mock.patch.object(main.time, 'sleep', side_effect=deliver_signal), \
+                        self.assertRaises(SystemExit) as exited:
+                    config.translation_prompt = None
+                    main.run(config)
+                self.assertEqual(exited.exception.code, 0 if signum == main.signal.SIGINT else 128 + int(signum))
+
+    def test_downstream_failure_cancels_a_network_waiting_transcriber(self):
+        class Getter:
+            def loop(self, output_queue):
+                output_queue.put(None)
+
+        class Transcriber:
+            def __init__(self):
+                self.started = threading.Event()
+                self.cancelled = threading.Event()
+                self.finished = threading.Event()
+
+            def loop(self, input_queue, output_queue):
+                input_queue.get(timeout=2)
+                self.started.set()
+                if not self.cancelled.wait(timeout=3):
+                    raise AssertionError('transcriber was not cancelled after downstream failure')
+                output_queue.put(None)
+                self.finished.set()
+
+            def stop(self):
+                self.cancelled.set()
+
+        transcriber = Transcriber()
+
+        class Exporter:
+            def loop(self, input_queue):
+                if not transcriber.started.wait(timeout=2):
+                    raise AssertionError('transcriber did not start')
+                raise RuntimeError('export failed')
+
+        with self._pipeline(Getter(), transcriber, None, Exporter()) as config, \
+                self.assertRaisesRegex(RuntimeError, 'Pipeline stopped because a worker failed'):
+            config.translation_prompt = None
+            main.run(config)
+        self.assertTrue(transcriber.finished.is_set())
 
     def test_early_exporter_exit_cancels_translator_even_after_input_eof(self):
         class Getter:
