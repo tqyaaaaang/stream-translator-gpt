@@ -21,7 +21,7 @@ if __name__ == '__main__':
 
 from .utils.common import ClientPool, SAMPLE_RATE, SAMPLES_PER_FRAME, start_daemon_thread, is_url
 from .getter.audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAudioGetter, StreamAudioGetter
-from .getter.time_range import normalize_time_range
+from .getter.time_range import normalize_time_range, normalize_time_range_strict
 from .transcriber.audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
 from .transcriber.modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_STREAM_MAX_SEND_RATE,
                                    ModulateStreamingTranscriber)
@@ -117,6 +117,11 @@ class Config:
     to: Annotated[str | None, tyro.conf.arg(metavar='TIME')] = None
     """Stop at this absolute source position, not a duration; accepts the same time formats as --ss. Must be later
     than --ss (or zero if --ss is omitted). Ignored with a warning for device input or --live-from-start."""
+
+    time_range_strict: Annotated[bool, tyro.conf.FlagCreatePairsOff] = False
+    """Use conservative precise trimming for HLS/TS instead of the default fast seek, which may be off by a segment.
+    Strict mode reads preceding audio and may start more slowly. Requires --ss or --to; otherwise warns and is ignored.
+    Also ignored with a warning for device input or --live-from-start."""
 
     pacer: Literal['unlimited', 'realtime'] = 'unlimited'
     """Control decoded audio pacing for URL streams and local files. Unlimited mode reads as fast as downstream
@@ -357,6 +362,7 @@ class Config:
 
 def _normalize_input_time_range(config: Config):
     """Ignore incompatible ranges once, or validate before starting any workers."""
+    config.time_range_strict = normalize_time_range_strict(config.ss, config.to, config.time_range_strict)
     if config.ss is None and config.to is None:
         return
     reasons = []
@@ -365,8 +371,10 @@ def _normalize_input_time_range(config: Config):
     if config.live_from_start:
         reasons.append('--live-from-start')
     if reasons:
-        logger.warning('Ignoring --ss and --to with %s', ' and '.join(reasons))
+        options = '--ss, --to and --time-range-strict' if config.time_range_strict else '--ss and --to'
+        logger.warning('Ignoring %s with %s', options, ' and '.join(reasons))
         config.ss = config.to = None
+        config.time_range_strict = False
         return
     normalize_time_range(config.ss, config.to)
 
@@ -375,6 +383,8 @@ def _create_audio_getter(config: Config):
     _normalize_input_time_range(config)
     time_range = {name: value for name in ('ss', 'to')
                   if (value := getattr(config, name)) is not None}
+    if config.time_range_strict:
+        time_range['time_range_strict'] = True
     realtime = config.pacer == 'realtime'
     if config.url.lower() == 'device':
         if realtime:

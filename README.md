@@ -124,12 +124,14 @@ Use `--ss TIME` / `--to TIME` to process a source interval, for example
 `stream-translator-gpt recording.mp3 --ss 00:10:00 --to 00:12:00` (two minutes).
 These are FFmpeg-style positions: `--to` is the absolute end, not a duration. Both options are optional;
 times must be non-negative seconds or `[HH:]MM:SS[.fraction]` (seconds also accept `s`, `ms`, `us`).
-Seekable files and direct media URLs use an early seek with a short pre-roll, followed by precise trimming.
-URL inputs use yt-dlp's FFmpeg downloader. HLS playlists use linear decoding before trimming to handle segment
-boundaries and timestamp discontinuities correctly; this reads the preceding audio and can take longer to start.
+URL inputs use yt-dlp's FFmpeg downloader. HLS/TS inputs default to fast seeking directly to the target;
+the result can be offset by a segment, with no guaranteed 10-second error limit.
+Add `--time-range-strict` for reliable HLS/TS trimming: decode from the beginning, then discard the preceding
+audio. This reads the prefix and can delay startup, but does not enforce 1× speed or send discarded audio to an API.
+Other seekable files and media URLs retain efficient indexed seeking with precise trimming in either mode.
 For other formats, servers, media indexing, and live DVR availability determine how much data can be skipped.
 Output timestamps start at zero for the selected interval. Device input and `--live-from-start` warn and ignore
-both options. `--pacer` works independently of the selected interval.
+range options. `--time-range-strict` warns and is ignored without `--ss` or `--to`; `--pacer` works independently.
 
 **Transcription backends** (default is local **Whisper**):
 
@@ -218,6 +220,7 @@ requests. `--translation-threads` applies only to the new implementation.
 | `--live-from-start`                | False                          | Ask yt-dlp to download a supported livestream from its beginning instead of the current live edge. This yt-dlp feature is experimental and extractor-dependent.                                                                                                     |
 | `--ss TIME`                       | disabled                       | Start at this source position for local files or URLs; non-negative seconds or `[HH:]MM:SS[.fraction]`. Ignored with a warning for device input or `--live-from-start`. |
 | `--to TIME`                       | disabled                       | Stop at this absolute source position, not a duration; must be greater than `--ss` (or zero). Ignored with a warning for device input or `--live-from-start`. |
+| `--time-range-strict`             | disabled                       | Use reliable linear trimming for HLS/TS instead of fast, potentially segment-offset seeking. Reads preceding audio. Ignored with a warning without `--ss` / `--to`, for device input, or with `--live-from-start`. |
 | `--stream-format-diagnostic-file PATH` | disabled                  | Have yt-dlp write allowlisted metadata about the selected stream format to the user-specified path, replacing that file for each stream. This is disabled unless explicitly supplied; no implicit diagnostic file is created.                                      |
 | `--pacer`                          | unlimited                      | Input pacing for URL streams and local files: `unlimited` reads as fast as downstream capacity permits; `realtime` emits one second of decoded audio per second of wall-clock time. Device input is already real-time, so a non-default value is ignored with a warning. |
 | `--device-index`                   |                                | The index of the device that needs to be recorded. If not set, the system default recording device will be used.                                                                                                                                                      |

@@ -1,5 +1,6 @@
 """Parse source positions shared by the local-file and stream audio getters."""
 
+import logging
 import re
 from decimal import Decimal, localcontext
 from pathlib import Path
@@ -63,19 +64,34 @@ def format_seconds(seconds: float) -> str:
     return f'{seconds:.6f}'.rstrip('0').rstrip('.') or '0'
 
 
-def ffmpeg_time_range_options(ss: float | None, to: float | None, *, linear: bool = False) -> tuple[dict, dict]:
+def normalize_time_range_strict(ss, to, time_range_strict: bool) -> bool:
+    """Ignore strict seeking without a range; an explicit zero is a boundary."""
+    if time_range_strict and ss is None and to is None:
+        logging.getLogger('main').warning(
+            '--time-range-strict requires --ss or --to; ignoring --time-range-strict')
+        return False
+    return time_range_strict
+
+
+def ffmpeg_time_range_options(ss: float | None, to: float | None, *, seek_mode: str = 'indexed') -> tuple[dict, dict]:
     """Build source-relative seek/trim options for normalized time positions.
 
-    HLS requires linear decoding: discontinuities can reset its timestamps, so
-    retaining raw PTS during seeking would trim against the wrong timeline.
-    Other inputs seek close to the target and decode only a bounded preroll.
+    ``indexed`` retains timestamps and trims after a bounded seek preroll.
+    ``fast`` uses input seeking without retaining discontinuous HLS timestamps;
+    it can start at a nearby segment. ``linear`` decodes from the beginning and
+    uses output seeking for strict HLS/TS ranges, including timestamp resets.
     """
+    if seek_mode not in ('indexed', 'fast', 'linear'):
+        raise ValueError(f'Unknown audio seek mode: {seek_mode}')
     if ss is None and to is None:
         return {}, {}
     start = ss or 0.0
-    if linear:
+    if seek_mode == 'linear':
         input_options = {}
         output_options = {'ss': format_seconds(start)}
+    elif seek_mode == 'fast':
+        input_options = {'ss': format_seconds(start)}
+        output_options = {}
     else:
         coarse_start = max(0.0, start - _SEEK_PREROLL_SECONDS)
         input_options = {'copyts': None, 'start_at_zero': None, 'ss': format_seconds(coarse_start)}

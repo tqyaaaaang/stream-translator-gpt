@@ -2,6 +2,7 @@ import io
 import json
 import math
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,7 @@ from stream_translator_gpt.getter.audio_getter import (
     _StreamTransportStats,
 )
 from stream_translator_gpt.utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME
-from stream_translator_gpt.getter.time_range import is_local_hls
+from stream_translator_gpt.getter.time_range import ffmpeg_time_range_options, is_local_hls
 
 
 GETTER_MODULE = 'stream_translator_gpt.getter.audio_getter'
@@ -31,13 +32,14 @@ GETTER_MODULE = 'stream_translator_gpt.getter.audio_getter'
 class LocalFileTimeRangeTest(unittest.TestCase):
 
     @staticmethod
-    def _run_mocked(ss=None, to=None, realtime=False):
+    def _run_mocked(ss=None, to=None, realtime=False, time_range_strict=False):
         process = mock.Mock(stdout=io.BytesIO(np.zeros(SAMPLES_PER_FRAME, dtype=np.float32).tobytes()))
         process.wait.return_value = 0
         process.poll.return_value = 0
         builder = mock.Mock()
         builder.output.return_value.run_async.return_value = process
-        getter = LocalFileAudioGetter('clip.wav', realtime=realtime, ss=ss, to=to)
+        getter = LocalFileAudioGetter('clip.wav', realtime=realtime, ss=ss, to=to,
+                                      time_range_strict=time_range_strict)
         output = queue.SimpleQueue()
         with mock.patch(f'{GETTER_MODULE}.ffmpeg.input', return_value=builder) as ffmpeg_input:
             getter.loop(output)
@@ -78,20 +80,47 @@ class LocalFileTimeRangeTest(unittest.TestCase):
             self.assertFalse(is_local_hls('audio-pipe'))
         open_file.assert_not_called()
 
-    def test_local_transport_streams_use_linear_output_seeking(self):
+    def test_local_transport_streams_use_fast_or_strict_seeking(self):
         for extension in ('.ts', '.mpegts', '.M3U8'):
-            with self.subTest(extension=extension):
-                process = mock.Mock(stdout=io.BytesIO(np.zeros(SAMPLES_PER_FRAME, dtype=np.float32).tobytes()))
-                process.wait.return_value = process.poll.return_value = 0
-                builder = mock.Mock()
-                builder.output.return_value.run_async.return_value = process
-                getter = LocalFileAudioGetter('clip' + extension, ss=220, to=222)
-                with mock.patch(f'{GETTER_MODULE}.ffmpeg.input', return_value=builder) as ffmpeg_input:
-                    getter.loop(queue.SimpleQueue())
-                ffmpeg_input.assert_called_once_with('clip' + extension, loglevel='panic')
-                self.assertEqual(builder.output.call_args.kwargs['ss'], '220')
-                self.assertEqual(builder.output.call_args.kwargs['t'], '2')
-                self.assertNotIn('af', builder.output.call_args.kwargs)
+            for strict in (False, True):
+                with self.subTest(extension=extension, strict=strict):
+                    process = mock.Mock(stdout=io.BytesIO(np.zeros(SAMPLES_PER_FRAME, dtype=np.float32).tobytes()))
+                    process.wait.return_value = process.poll.return_value = 0
+                    builder = mock.Mock()
+                    builder.output.return_value.run_async.return_value = process
+                    getter = LocalFileAudioGetter('clip' + extension, ss=220, to=222, time_range_strict=strict)
+                    with mock.patch(f'{GETTER_MODULE}.ffmpeg.input', return_value=builder) as ffmpeg_input:
+                        getter.loop(queue.SimpleQueue())
+                    expected_input = {'loglevel': 'panic'} if strict else {'loglevel': 'panic', 'ss': '220'}
+                    ffmpeg_input.assert_called_once_with('clip' + extension, **expected_input)
+                    self.assertEqual(builder.output.call_args.kwargs.get('ss'), '220' if strict else None)
+                    self.assertEqual(builder.output.call_args.kwargs['t'], '2')
+                    self.assertNotIn('af', builder.output.call_args.kwargs)
+
+    def test_strict_without_range_warns_and_does_not_inspect_or_seek_source(self):
+        with self.assertLogs('main', level='WARNING') as logs, \
+                mock.patch(f'{GETTER_MODULE}.is_local_hls') as detect_hls:
+            ffmpeg_input, builder, _, getter = self._run_mocked(time_range_strict=True)
+        strict_warnings = [message for message in logs.output if '--time-range-strict' in message]
+        self.assertEqual(len(strict_warnings), 1)
+        self.assertIn('--time-range-strict requires --ss or --to', strict_warnings[0])
+        self.assertFalse(getter.time_range_strict)
+        detect_hls.assert_not_called()
+        ffmpeg_input.assert_called_once_with('clip.wav', loglevel='panic')
+        self.assertNotIn('ss', builder.output.call_args.kwargs)
+        self.assertNotIn('af', builder.output.call_args.kwargs)
+
+    def test_range_option_modes_cover_zero_to_only_and_no_range(self):
+        for mode in ('indexed', 'fast', 'linear'):
+            self.assertEqual(ffmpeg_time_range_options(None, None, seek_mode=mode), ({}, {}))
+        for strict in (False, True):
+            for ss, to in [(0, None), (None, 1)]:
+                with self.subTest(strict=strict, ss=ss, to=to):
+                    with self.assertNoLogs('main', level='WARNING'):
+                        getter = LocalFileAudioGetter('clip.wav', ss=ss, to=to, time_range_strict=strict)
+                    self.assertEqual(getter.time_range_strict, strict)
+        with self.assertRaises(ValueError):
+            ffmpeg_time_range_options(0, 1, seek_mode='unsupported')
 
     def test_ffmpeg_command_places_seek_before_input_for_efficient_access(self):
         process = mock.Mock(stdout=io.BytesIO(np.zeros(SAMPLES_PER_FRAME, dtype=np.float32).tobytes()))
@@ -148,7 +177,7 @@ class LocalFileTimeRangeTest(unittest.TestCase):
 class StreamTimeRangeTest(unittest.TestCase):
 
     @staticmethod
-    def _open_mocked(ss=None, to=None, live_from_start=False):
+    def _open_mocked(ss=None, to=None, live_from_start=False, time_range_strict=False):
         downloader = mock.Mock(pid=111)
         decoder = mock.Mock(pid=112)
         builder = mock.Mock()
@@ -158,7 +187,7 @@ class StreamTimeRangeTest(unittest.TestCase):
                 mock.patch(f'{GETTER_MODULE}.ffmpeg.input', return_value=builder) as ffmpeg_input, \
                 mock.patch(f'{GETTER_MODULE}.threading.Thread') as transport:
             _open_stream('https://example.test/video', 'bestaudio', '', '', 'workdir',
-                         ss=ss, to=to, live_from_start=live_from_start)
+                         ss=ss, to=to, live_from_start=live_from_start, time_range_strict=time_range_strict)
         transport.return_value.start.assert_called_once_with()
         return popen.call_args.args[0], ffmpeg_input, builder
 
@@ -185,12 +214,13 @@ class StreamTimeRangeTest(unittest.TestCase):
                     self.assertEqual(command[2], 'stream_translator_gpt.getter.range_downloader')
                     # Use yt-dlp's actual parser so quoting/tokenization is
                     # checked without invoking a shell or making any request.
-                    parsed_start, parsed_end, parsed = parse_range_options(command[3:])
+                    parsed_start, parsed_end, strict, parsed = parse_range_options(command[3:])
+                    self.assertFalse(strict)
                     self.assertEqual(parsed_start, float(start) if ss is not None else None)
                     self.assertEqual(parsed_end, float(start) + float(duration) if duration is not None else None)
                     options = parsed.ydl_opts
                     configure_range_downloader(options, {'protocol': 'https', 'url': 'https://example.test/media'},
-                                               parsed_start, parsed_end)
+                                               parsed_start, parsed_end, strict)
                     args = options['external_downloader_args']
                     self.assertEqual(args['ffmpeg_i'], ['-copyts', '-start_at_zero', '-ss', coarse])
                     expected = ['-vn', '-c:a', 'pcm_f32le', '-ar', str(SAMPLE_RATE), '-ac', '1',
@@ -207,20 +237,22 @@ class StreamTimeRangeTest(unittest.TestCase):
 
     def test_direct_opener_ignores_even_invalid_range_when_live_from_start_is_enabled(self):
         with self.assertLogs('main', level='WARNING') as logs:
-            command, _, _ = self._open_mocked('invalid', -1, live_from_start=True)
+            command, _, _ = self._open_mocked('invalid', -1, live_from_start=True, time_range_strict=True)
         self.assertEqual(len(logs.output), 1)
         self.assertIn('--live-from-start', logs.output[0])
         self.assertIn('--live-from-start', command)
         self.assertNotIn('--download-sections', command)
+        self.assertEqual(command[2], 'yt_dlp')
 
     def test_direct_constructor_ignores_range_before_validation_for_live_start(self):
         with self.assertLogs('main', level='WARNING') as logs:
             getter = StreamAudioGetter('https://example.test/live', 'bestaudio', '', '',
-                                       live_from_start=True, ss='invalid', to=-1)
+                                       live_from_start=True, ss='invalid', to=-1, time_range_strict=True)
         try:
             self.assertEqual(len(logs.output), 1)
             self.assertIsNone(getter.ss)
             self.assertIsNone(getter.to)
+            self.assertFalse(getter.time_range_strict)
         finally:
             getter.__del__()
 
@@ -230,8 +262,30 @@ class StreamTimeRangeTest(unittest.TestCase):
                 _open_stream('https://example.test/video', 'bestaudio', '', '', 'workdir', ss=2, to=1)
         popen.assert_not_called()
 
+    def test_strict_without_range_is_ignored_by_direct_getter_and_opener(self):
+        with self.assertLogs('main', level='WARNING') as logs:
+            command, _, _ = self._open_mocked(time_range_strict=True)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn('--time-range-strict requires --ss or --to', logs.output[0])
+        self.assertEqual(command[2], 'yt_dlp')
+        with self.assertLogs('main', level='WARNING') as logs:
+            getter = StreamAudioGetter('https://example.test/video', 'bestaudio', '', '', time_range_strict=True)
+        self.assertEqual(len(logs.output), 1)
+        self.assertFalse(getter.time_range_strict)
+        getter.__del__()
+
+    def test_zero_start_and_to_only_keep_strict_mode_in_child_protocol(self):
+        from stream_translator_gpt.getter.range_downloader import parse_range_options
+
+        for ss, to in [(0, None), (None, 1)]:
+            with self.subTest(ss=ss, to=to), self.assertNoLogs('main', level='WARNING'):
+                command, _, _ = self._open_mocked(ss, to, time_range_strict=True)
+                start, end, strict, _ = parse_range_options(command[3:])
+                self.assertEqual((start, end, strict), (ss, to, True))
+
     def test_finite_section_has_normal_eof_even_for_less_than_one_audio_frame(self):
-        getter = StreamAudioGetter('https://example.test/video', 'bestaudio', '', '', ss='3', to='3.001')
+        getter = StreamAudioGetter('https://example.test/video', 'bestaudio', '', '', ss='3', to='3.001',
+                                   time_range_strict=True)
         samples = np.arange(16, dtype=np.float32)
         decoder = mock.Mock(stdout=io.BytesIO(samples.tobytes()))
         decoder.wait.return_value = 0
@@ -246,6 +300,7 @@ class StreamTimeRangeTest(unittest.TestCase):
             getter.loop(output)
         self.assertEqual(open_stream.call_args.kwargs['ss'], 3)
         self.assertEqual(open_stream.call_args.kwargs['to'], 3.001)
+        self.assertTrue(open_stream.call_args.kwargs['time_range_strict'])
         actual = output.get_nowait()
         np.testing.assert_array_equal(actual[:len(samples)], samples)
         np.testing.assert_array_equal(actual[len(samples):], 0)
@@ -266,17 +321,17 @@ import json
 from yt_dlp import YoutubeDL
 from yt_dlp.downloader.external import FFmpegFD
 from stream_translator_gpt.getter.range_downloader import configure_range_downloader, parse_range_options
-start, end, parsed = parse_range_options(json.loads(sys.argv[4]))
+start, end, strict, parsed = parse_range_options(json.loads(sys.argv[4]))
 params = parsed.ydl_opts
 params['quiet'] = False
 info = {
     'url': sys.argv[1], 'ext': sys.argv[2], 'protocol': sys.argv[3],
 }
-configure_range_downloader(params, info, start, end)
+configure_range_downloader(params, info, start, end, strict)
 with YoutubeDL(params) as ydl:
     sys.exit(FFmpegFD(ydl, params)._call_downloader('-', info))
 '''
-        command, _, _ = self._open_mocked('0.2', '0.5')
+        command, _, _ = self._open_mocked('0.2', '0.5', time_range_strict=True)
         with tempfile.TemporaryDirectory() as directory:
             for extension, encoder, protocol in [
                 ('m4a', 'aac', 'http'),
@@ -440,14 +495,14 @@ import sys
 from yt_dlp import YoutubeDL
 from yt_dlp.downloader.external import FFmpegFD
 from stream_translator_gpt.getter.range_downloader import configure_range_downloader, parse_range_options
-start, end, parsed = parse_range_options(json.loads(sys.argv[1]))
+start, end, strict, parsed = parse_range_options(json.loads(sys.argv[1]))
 params = parsed.ydl_opts
 params['quiet'] = True
 info = json.loads(sys.argv[2])
 if info.pop('__capture_segment_reads', False):
     params['quiet'] = False
     params['verbose'] = True
-configure_range_downloader(params, info, start, end)
+configure_range_downloader(params, info, start, end, strict)
 with YoutubeDL(params) as ydl:
     sys.exit(FFmpegFD(ydl, params)._call_downloader('-', info))
 '''
@@ -496,9 +551,21 @@ with YoutubeDL(params) as ydl:
             raise AssertionError(result.stderr.decode(errors='replace'))
         return np.frombuffer(result.stdout, np.float32)
 
-    def _get_audio(self, path, info, ss, to, local=False, debug_log=None):
-        getter = (LocalFileAudioGetter(str(path), ss=ss, to=to) if local else
-                  StreamAudioGetter(path.as_uri(), 'bestaudio/best', '', '', ss=ss, to=to))
+    @staticmethod
+    def _fast_reference(path, ss, to):
+        command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-ss', str(ss or 0), '-i', str(path)]
+        if to is not None:
+            command += ['-t', str(to - (ss or 0))]
+        command += ['-vn', '-f', 'f32le', '-ac', '1', '-ar', str(SAMPLE_RATE), 'pipe:1']
+        result = subprocess.run(command, capture_output=True, timeout=20)
+        if result.returncode:
+            raise AssertionError(result.stderr.decode(errors='replace'))
+        return np.frombuffer(result.stdout, np.float32)
+
+    def _get_audio(self, path, info, ss, to, local=False, debug_log=None, time_range_strict=False):
+        getter = (LocalFileAudioGetter(str(path), ss=ss, to=to, time_range_strict=time_range_strict) if local else
+                  StreamAudioGetter(path.as_uri(), 'bestaudio/best', '', '', ss=ss, to=to,
+                                    time_range_strict=time_range_strict))
         output = queue.SimpleQueue()
         real_popen = subprocess.Popen
         diagnostic_file = tempfile.TemporaryFile() if debug_log is not None else None
@@ -561,7 +628,7 @@ with YoutubeDL(params) as ydl:
                 reference = self._reference(path, ss, to)
                 for local in (False, True):
                     with self.subTest(format=name, ss=ss, to=to, local=local):
-                        actual = self._get_audio(path, info, ss, to, local=local)
+                        actual = self._get_audio(path, info, ss, to, local=local, time_range_strict=True)
                         self._assert_position_matches(actual, reference)
 
     def test_near_zero_to_only_and_past_eof_ranges(self):
@@ -572,7 +639,7 @@ with YoutubeDL(params) as ydl:
             for ss, to in [(None, 0.75), (0, 0.75), (0.1, 0.85), (224.5, 230)]:
                 reference = self._reference(path, ss, to)
                 with self.subTest(format=name, ss=ss, to=to):
-                    self._assert_position_matches(self._get_audio(path, info, ss, to), reference)
+                    self._assert_position_matches(self._get_audio(path, info, ss, to, time_range_strict=True), reference)
 
     def test_zero_start_without_endpoint_is_not_treated_as_disabled(self):
         path, info = self.sources.get('opus', self.sources['aac'])
@@ -589,6 +656,42 @@ with YoutubeDL(params) as ydl:
         self.assertIn('-ss 210.1', command)
         self.assertLess(command.index('-ss 210.1'), command.index(' -i '))
         self.assertIn('atrim=start=220.1,asetpts=PTS-STARTPTS', command)
+
+    def test_default_hls_seek_skips_prefix_and_reaches_clean_finite_eof(self):
+        path, info = self.sources['hls']
+        diagnostics = []
+        actual = self._get_audio(path, info, 220.1, 223.1, debug_log=diagnostics)
+        # HLS input seek can lose PTS briefly, so even native output -t may be
+        # frame-rounded. Match the same native seek exactly, not a tolerance
+        # which could hide extra/missing media introduced by our pipeline.
+        reference = self._fast_reference(path, 220.1, 223.1)
+        self._assert_position_matches(actual, reference)
+        np.testing.assert_array_equal(actual[:len(reference)], reference)
+        # Fast mode deliberately accepts segment-boundary error. It must still
+        # produce content near the requested point, not audio from the beginning.
+        peak = int(np.argmax(np.abs(np.fft.rfft(actual[:SAMPLE_RATE]))))
+        self.assertGreater(peak, 2300)
+        diagnostic = '\n'.join(diagnostics)
+        command = next(line for line in diagnostic.splitlines() if 'ffmpeg command line:' in line)
+        self.assertIn('-ss 220.1', command)
+        self.assertLess(command.index('-ss 220.1'), command.index(' -i '))
+        self.assertIn('-t 3', command)
+        self.assertNotIn('-copyts', command)
+        self.assertNotIn('atrim', command)
+        # FFmpeg may inspect the first segment to detect the codec, but should
+        # not read the complete prefix as strict/linear seeking would.
+        opened = {int(index) for index in re.findall(r"Opening ['\"][^\r\n]*?hls(\d+)\.ts['\"]", diagnostic)}
+        self.assertTrue(any(index >= 40 for index in opened), diagnostic)
+        self.assertFalse(opened.intersection(range(2, 38)), opened)
+
+    def test_default_hls_seek_handles_zero_to_only_and_unbounded_tail(self):
+        path, info = self.sources['hls']
+        for ss, to in [(None, 0.75), (0, 0.75), (220, None)]:
+            reference = self._fast_reference(path, ss, to)
+            for local in (False, True):
+                with self.subTest(ss=ss, to=to, local=local):
+                    actual = self._get_audio(path, info, ss, to, local=local)
+                    self._assert_position_matches(actual, reference)
 
     def test_hls_discontinuity_resets_do_not_drop_or_select_the_wrong_audio(self):
         parts = []
@@ -613,7 +716,7 @@ with YoutubeDL(params) as ydl:
             reference = self._reference(path, ss, to)
             for local_path, local in [(path, False), (path, True), (extensionless, True)]:
                 with self.subTest(ss=ss, to=to, local=local, path=local_path.name):
-                    actual = self._get_audio(local_path, info, ss, to, local=local)
+                    actual = self._get_audio(local_path, info, ss, to, local=local, time_range_strict=True)
                     self._assert_position_matches(actual, reference)
 
     def test_split_video_and_audio_inputs_keep_audio_from_second_input(self):

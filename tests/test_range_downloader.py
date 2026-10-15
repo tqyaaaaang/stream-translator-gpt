@@ -26,35 +26,41 @@ class RangeDownloaderTest(unittest.TestCase):
         params = {'external_downloader_args': {'curl': ['--retry', '2'],
                                                'ffmpeg_i1': ['-ss', '999'], 'ffmpeg_o1': ['-t', '999']}}
         cases = [
-            ({'protocol': 'https'}, False),
-            ({'protocol': 'm3u8_native'}, True),
-            ({'protocol': 'http_dash_segments'}, False),
-            ({'url': 'https://example.test/stream.M3U8?token=secret'}, True),
-            ({'ext': 'ts'}, True),
+            ({'protocol': 'https'}, False, 'indexed'),
+            ({'protocol': 'm3u8_native'}, False, 'fast'),
+            ({'protocol': 'm3u8_native'}, True, 'linear'),
+            ({'protocol': 'm3u8_native'}, False, 'fast'),
+            ({'protocol': 'http_dash_segments'}, True, 'indexed'),
+            ({'url': 'https://example.test/stream.M3U8?token=secret'}, False, 'fast'),
+            ({'url': 'https://example.test/stream.MPEGTS?token=secret'}, True, 'linear'),
+            ({'ext': 'ts'}, False, 'fast'),
             ({'protocol': 'https+https', 'requested_formats': [
-                {'protocol': 'https'}, {'protocol': 'm3u8'}]}, True),
-            ({'protocol': 'https'}, False),
+                {'protocol': 'https'}, {'protocol': 'm3u8'}]}, True, 'linear'),
+            ({'protocol': 'https'}, False, 'indexed'),
         ]
-        for info, linear in cases:
-            with self.subTest(info=info):
-                self.assertEqual(configure_range_downloader(params, info, 220, 223), linear)
+        for info, strict, seek_mode in cases:
+            with self.subTest(info=info, strict=strict):
+                self.assertEqual(configure_range_downloader(params, info, 220, 223, strict), seek_mode)
                 args = params['external_downloader_args']
                 self.assertEqual(args['curl'], ['--retry', '2'])
                 self.assertNotIn('ffmpeg_i1', args)
                 self.assertNotIn('ffmpeg_o1', args)
-                self.assertEqual(args['ffmpeg_i'], [] if linear else
-                                 ['-copyts', '-start_at_zero', '-ss', '210'])
-                output_range = ['-ss', '220'] if linear else ['-af', 'atrim=start=220,asetpts=PTS-STARTPTS']
+                expected_input = {'linear': [], 'fast': ['-ss', '220'],
+                                  'indexed': ['-copyts', '-start_at_zero', '-ss', '210']}
+                self.assertEqual(args['ffmpeg_i'], expected_input[seek_mode])
+                output_range = {'linear': ['-ss', '220'], 'fast': [],
+                                'indexed': ['-af', 'atrim=start=220,asetpts=PTS-STARTPTS']}[seek_mode]
                 self.assertEqual(args['ffmpeg_o'], ['-vn', '-c:a', 'pcm_f32le', '-ar', '16000', '-ac', '1',
                                                     *output_range, '-t', '3', '-f', 'matroska'])
 
     def test_parser_preserves_transport_options_and_replaces_inherited_section_ranges(self):
-        ss, to, parsed = parse_range_options([
-            '220', '', '--', '--ignore-config', 'https://example.test/watch?v=1', '-o', '-', '--quiet',
+        ss, to, strict, parsed = parse_range_options([
+            '220', '', 'strict', '--', '--ignore-config', 'https://example.test/watch?v=1', '-o', '-', '--quiet',
             '--cookies', 'cookies.txt', '--proxy', 'http://127.0.0.1:8080', '--wait-for-video', '60',
             '--download-sections', '*2-3', '--print-to-file', 'before_dl:%(protocol)s', 'diagnostic.txt',
         ])
         self.assertEqual((ss, to), (220, None))
+        self.assertTrue(strict)
         self.assertEqual(parsed.urls, ['https://example.test/watch?v=1'])
         params = parsed.ydl_opts
         self.assertEqual(params['cookiefile'], 'cookies.txt')
@@ -67,7 +73,9 @@ class RangeDownloaderTest(unittest.TestCase):
         self.assertIn('before_dl', params['print_to_file'])
 
     def test_invalid_boundaries_fail_before_yt_dlp_or_network_access(self):
-        for argv in [[], ['', '', '--'], ['-1', '', '--'], ['2', '1', '--'], ['1', '2', '-']]:
+        for argv in [[], ['', '', 'fast', '--'], ['-1', '', 'fast', '--'],
+                     ['2', '1', 'strict', '--'], ['1', '2', 'fast', '-'],
+                     ['1', '2', '--'], ['1', '2', 'unknown', '--']]:
             with self.subTest(argv=argv), mock.patch(
                     'stream_translator_gpt.getter.range_downloader.parse_options') as parse:
                 with self.assertRaises(ValueError):
@@ -110,7 +118,7 @@ class RangeDownloaderTest(unittest.TestCase):
             environment['PYTHONPATH'] = str(Path(__file__).resolve().parents[1])
             result = subprocess.run([
                 sys.executable, '-B', '-m', 'stream_translator_gpt.getter.range_downloader',
-                '0.2', '0.5', '--', '--ignore-config', '--enable-file-urls',
+                '0.2', '0.5', 'fast', '--', '--ignore-config', '--enable-file-urls',
                 '--load-info-json', str(info), '-o', '-', '--quiet', '-f', 'b',
                 '--print-to-file', 'before_dl:%(protocol)s', str(diagnostic),
             ], cwd=directory, env=environment, capture_output=True, timeout=20)

@@ -132,6 +132,7 @@ class AudioTimeRangeCliTest(unittest.TestCase):
                 config = self._parse(source)
                 self.assertIsNone(config.ss)
                 self.assertIsNone(config.to)
+                self.assertFalse(config.time_range_strict)
 
     def test_options_can_appear_before_or_after_input_and_use_equals(self):
         cases = (
@@ -155,11 +156,29 @@ class AudioTimeRangeCliTest(unittest.TestCase):
 
     def test_bare_wait_option_does_not_consume_range_options(self):
         config = self._parse('https://example.test/video', '--wait-for-video',
-                             '--ss', '1', '--to', '2', '--pacer', 'realtime')
+                             '--time-range-strict', '--ss', '1', '--to', '2', '--pacer', 'realtime')
         self.assertEqual(config.wait_for_video, 60)
         self.assertEqual(config.ss, '1')
         self.assertEqual(config.to, '2')
         self.assertEqual(config.pacer, 'realtime')
+        self.assertTrue(config.time_range_strict)
+
+    def test_strict_flag_accepts_either_boundary_including_zero_start(self):
+        for source in ('clip.mp3', 'https://example.test/video'):
+            for boundary in (('--ss', '0'), ('--ss=03:40',), ('--to', '12.5')):
+                for flag_first in (False, True):
+                    args = (('--time-range-strict', source, *boundary) if flag_first else
+                            (source, *boundary, '--time-range-strict'))
+                    with self.subTest(args=args):
+                        config = self._parse(*args)
+                        with mock.patch('stream_translator_gpt.main.logger.warning') as warning:
+                            _validate_and_normalize(config)
+                        self.assertTrue(config.time_range_strict)
+                        warning.assert_not_called()
+
+    def test_strict_flag_does_not_accept_an_argument(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self._parse('clip.mp3', '--ss', '0', '--time-range-strict', 'true')
 
     def test_options_require_values(self):
         for args in (
@@ -197,6 +216,72 @@ class AudioTimeRangeCliTest(unittest.TestCase):
 
 
 class AudioTimeRangeFactoryTest(unittest.TestCase):
+
+    def test_strict_is_forwarded_to_local_and_stream_only_when_enabled(self):
+        for source, factory in (('clip.mp3', 'LocalFileAudioGetter'),
+                                ('https://example.test/video', 'StreamAudioGetter')):
+            for boundaries in ({'ss': '0'}, {'ss': '03:40'}, {'to': '90'}, {'ss': '2', 'to': '4'}):
+                for strict in (False, True):
+                    with self.subTest(source=source, boundaries=boundaries, strict=strict):
+                        config = Config(url=source, pacer='realtime', time_range_strict=strict, **boundaries)
+                        with mock.patch(f'stream_translator_gpt.main.{factory}') as getter, \
+                                mock.patch('stream_translator_gpt.main.logger.warning') as warning:
+                            _validate_and_normalize(config)
+                            _create_audio_getter(config)
+                        self.assertEqual(getter.call_args.kwargs.get('time_range_strict', False), strict)
+                        self.assertTrue(getter.call_args.kwargs['realtime'])
+                        warning.assert_not_called()
+
+    def test_strict_without_boundaries_warns_once_and_is_ignored(self):
+        cases = (
+            ('clip.mp3', 'LocalFileAudioGetter', {}),
+            ('https://example.test/video', 'StreamAudioGetter', {}),
+            ('device', 'DeviceAudioGetter', {}),
+            ('device', 'SoundDeviceAudioGetter', {'device_audio_getter': 'sounddevice'}),
+            ('https://example.test/video', 'StreamAudioGetter', {'live_from_start': True}),
+        )
+        for source, factory, extra in cases:
+            for validate_first in (False, True):
+                with self.subTest(source=source, extra=extra, validate_first=validate_first):
+                    config = Config(url=source, time_range_strict=True, **extra)
+                    with mock.patch(f'stream_translator_gpt.main.{factory}') as getter, \
+                            self.assertLogs('main', level='WARNING') as logs:
+                        if validate_first:
+                            _validate_and_normalize(config)
+                        _create_audio_getter(config)
+                        _validate_and_normalize(config)
+                    self.assertEqual(len(logs.output), 1)
+                    self.assertIn('--time-range-strict', logs.output[0])
+                    self.assertIn('--ss', logs.output[0])
+                    self.assertIn('--to', logs.output[0])
+                    self.assertFalse(config.time_range_strict)
+                    self.assertNotIn('time_range_strict', getter.call_args.kwargs)
+                    self.assertNotIn('ss', getter.call_args.kwargs)
+                    self.assertNotIn('to', getter.call_args.kwargs)
+
+    def test_incompatible_inputs_ignore_strict_and_boundaries_together_once(self):
+        cases = (
+            ('device', 'DeviceAudioGetter', {}),
+            ('DEVICE', 'SoundDeviceAudioGetter', {'device_audio_getter': 'sounddevice'}),
+            ('device', 'DeviceAudioGetter', {'live_from_start': True}),
+            ('https://example.test/video', 'StreamAudioGetter', {'live_from_start': True}),
+            ('clip.mp3', 'LocalFileAudioGetter', {'live_from_start': True}),
+        )
+        for source, factory, extra in cases:
+            for boundaries in ({'ss': '0'}, {'ss': 'invalid'}, {'to': '-1'}):
+                with self.subTest(source=source, extra=extra, boundaries=boundaries):
+                    config = Config(url=source, time_range_strict=True, **extra, **boundaries)
+                    with mock.patch(f'stream_translator_gpt.main.{factory}') as getter, \
+                            self.assertLogs('main', level='WARNING') as logs:
+                        _validate_and_normalize(config)
+                        _create_audio_getter(config)
+                    self.assertEqual(len(logs.output), 1)
+                    self.assertIn('--time-range-strict', logs.output[0])
+                    self.assertFalse(config.time_range_strict)
+                    self.assertIsNone(config.ss)
+                    self.assertIsNone(config.to)
+                    for name in ('ss', 'to', 'time_range_strict'):
+                        self.assertNotIn(name, getter.call_args.kwargs)
 
     def test_factories_forward_present_boundaries_without_changing_pacing(self):
         for source, factory in (('clip.mp3', 'LocalFileAudioGetter'),

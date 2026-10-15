@@ -20,7 +20,8 @@ import ffmpeg
 import numpy as np
 from scipy.signal import resample
 
-from .time_range import ffmpeg_time_range_options, format_seconds, is_local_hls, normalize_time_range
+from .time_range import (ffmpeg_time_range_options, format_seconds, is_local_hls, normalize_time_range,
+                         normalize_time_range_strict)
 from ..utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME, LoopWorkerBase
 from ..utils.logging_utils import redact_url
 
@@ -30,6 +31,17 @@ _stream_versions_lock = threading.Lock()
 _stream_versions_logged = False
 _STREAM_FORMAT_TEMPLATE = ('format_id=%(format_id)s protocol=%(protocol)s ext=%(ext)s acodec=%(acodec)s '
                            'vcodec=%(vcodec)s live_status=%(live_status)s')
+
+
+def _normalize_getter_time_range(ss, to, time_range_strict: bool, *, live_from_start: bool = False):
+    """Normalize direct getter calls as well as CLI-prevalidated settings."""
+    time_range_strict = normalize_time_range_strict(ss, to, time_range_strict)
+    if live_from_start and (ss is not None or to is not None or time_range_strict):
+        logger.warning('--ss, --to and --time-range-strict are ignored when --live-from-start is enabled')
+        ss = to = None
+        time_range_strict = False
+    ss, to = normalize_time_range(ss, to)
+    return ss, to, time_range_strict
 
 
 def _signal_exit_code(signum: int) -> int:
@@ -401,11 +413,10 @@ def _open_stream(url: str,
                  live_from_start: bool = False,
                  stream_format_diagnostic_file: str | None = None,
                  ss: str | float | None = None,
-                 to: str | float | None = None):
-    if live_from_start and (ss is not None or to is not None):
-        logger.warning('--ss and --to are ignored when --live-from-start is enabled')
-        ss = to = None
-    ss, to = normalize_time_range(ss, to)
+                 to: str | float | None = None,
+                 time_range_strict: bool = False):
+    ss, to, time_range_strict = _normalize_getter_time_range(
+        ss, to, time_range_strict, live_from_start=live_from_start)
     _log_stream_tool_versions()
     # stdout is reserved exclusively for media bytes. Quiet mode suppresses
     # progress/status text, while warnings and errors remain on inherited stderr.
@@ -436,7 +447,8 @@ def _open_stream(url: str,
         # boundaries, so the downstream decoder still sees a normal EOF.
         cmd = [sys.executable, '-m', 'stream_translator_gpt.getter.range_downloader',
                format_seconds(ss) if ss is not None else '',
-               format_seconds(to) if to is not None else '', '--', *cmd[3:]]
+               format_seconds(to) if to is not None else '',
+               'strict' if time_range_strict else 'fast', '--', *cmd[3:]]
         # The downloader runs in a private temp directory. Keep source-checkout
         # launches working even when this package is not installed into Python.
         environment = os.environ.copy()
@@ -502,11 +514,10 @@ class StreamAudioGetter(LoopWorkerBase):
                  live_from_start: bool = False,
                  stream_format_diagnostic_file: str | None = None,
                  ss: str | float | None = None,
-                 to: str | float | None = None) -> None:
-        if live_from_start and (ss is not None or to is not None):
-            logger.warning('--ss and --to are ignored when --live-from-start is enabled')
-            ss = to = None
-        self.ss, self.to = normalize_time_range(ss, to)
+                 to: str | float | None = None,
+                 time_range_strict: bool = False) -> None:
+        self.ss, self.to, self.time_range_strict = _normalize_getter_time_range(
+            ss, to, time_range_strict, live_from_start=live_from_start)
         self.url = url
         self.format = format
         self.cookies = cookies
@@ -569,6 +580,8 @@ class StreamAudioGetter(LoopWorkerBase):
             range_options = {}
             if self.ss is not None or self.to is not None:
                 range_options = {'ss': self.ss, 'to': self.to}
+                if self.time_range_strict:
+                    range_options['time_range_strict'] = True
             self.ffmpeg_process, self.ytdlp_process, self.transport_thread, transport_stats = _open_stream(
                 self.url,
                 self.format,
@@ -647,8 +660,9 @@ class LocalFileAudioGetter(LoopWorkerBase):
                  file_path: str,
                  realtime: bool = False,
                  ss: str | float | None = None,
-                 to: str | float | None = None) -> None:
-        self.ss, self.to = normalize_time_range(ss, to)
+                 to: str | float | None = None,
+                 time_range_strict: bool = False) -> None:
+        self.ss, self.to, self.time_range_strict = _normalize_getter_time_range(ss, to, time_range_strict)
         self.file_path = file_path
         self.realtime = realtime
         self.ffmpeg_process = None
@@ -692,10 +706,11 @@ class LocalFileAudioGetter(LoopWorkerBase):
         try:
             try:
                 has_range = self.ss is not None or self.to is not None
-                linear_seek = has_range and (Path(self.file_path).suffix.lower() in ('.ts', '.mpegts')
-                                             or is_local_hls(self.file_path))
+                segmented_media = has_range and (Path(self.file_path).suffix.lower() in ('.ts', '.mpegts')
+                                                or is_local_hls(self.file_path))
+                seek_mode = ('linear' if self.time_range_strict else 'fast') if segmented_media else 'indexed'
                 input_options, output_options = ffmpeg_time_range_options(
-                    self.ss, self.to, linear=linear_seek)
+                    self.ss, self.to, seek_mode=seek_mode)
                 input_options['loglevel'] = 'panic'
                 self.ffmpeg_process = (ffmpeg.input(self.file_path,
                                                     **input_options).output('pipe:',
