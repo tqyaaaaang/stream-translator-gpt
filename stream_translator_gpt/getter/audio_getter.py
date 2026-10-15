@@ -20,6 +20,7 @@ import ffmpeg
 import numpy as np
 from scipy.signal import resample
 
+from .time_range import format_seconds, normalize_time_range
 from ..utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME, LoopWorkerBase
 from ..utils.logging_utils import redact_url
 
@@ -384,7 +385,13 @@ def _open_stream(url: str,
                  cwd: str,
                  wait_for_video: int | None = None,
                  live_from_start: bool = False,
-                 stream_format_diagnostic_file: str | None = None):
+                 stream_format_diagnostic_file: str | None = None,
+                 ss: str | float | None = None,
+                 to: str | float | None = None):
+    if live_from_start and (ss is not None or to is not None):
+        logger.warning('--ss and --to are ignored when --live-from-start is enabled')
+        ss = to = None
+    ss, to = normalize_time_range(ss, to)
     _log_stream_tool_versions()
     # stdout is reserved exclusively for media bytes. Quiet mode suppresses
     # progress/status text, while warnings and errors remain on inherited stderr.
@@ -404,6 +411,17 @@ def _open_stream(url: str,
         cmd.extend(['--wait-for-video', str(wait_for_video)])
     if live_from_start:
         cmd.append('--live-from-start')
+    if ss is not None or to is not None:
+        start = format_seconds(ss) if ss is not None else '0'
+        end = format_seconds(to) if to is not None else 'inf'
+        # Let yt-dlp's downloader own both boundaries. Truncating the decoded
+        # pipe downstream would close ffmpeg before yt-dlp finishes, turning a
+        # successful finite section into an apparent transport failure.
+        cmd.extend(['--download-sections', f'*{start}-{end}'])
+        # Section downloads use yt-dlp's FFmpeg downloader. Decode there so
+        # FFmpeg can apply input seeking, then use a pipe-friendly container. This
+        # also avoids non-seekable m4a output and AAC-in-HLS remux failures.
+        cmd.extend(['--downloader-args', f'ffmpeg_o:-vn -c:a pcm_f32le -ar {SAMPLE_RATE} -ac 1 -f matroska'])
     if cookies:
         cmd.extend(['--cookies', cookies])
     if proxy:
@@ -463,7 +481,13 @@ class StreamAudioGetter(LoopWorkerBase):
                  realtime: bool = False,
                  wait_for_video: int | None = None,
                  live_from_start: bool = False,
-                 stream_format_diagnostic_file: str | None = None) -> None:
+                 stream_format_diagnostic_file: str | None = None,
+                 ss: str | float | None = None,
+                 to: str | float | None = None) -> None:
+        if live_from_start and (ss is not None or to is not None):
+            logger.warning('--ss and --to are ignored when --live-from-start is enabled')
+            ss = to = None
+        self.ss, self.to = normalize_time_range(ss, to)
         self.url = url
         self.format = format
         self.cookies = cookies
@@ -523,6 +547,9 @@ class StreamAudioGetter(LoopWorkerBase):
                            self.wait_for_video)
         completed = False
         try:
+            range_options = {}
+            if self.ss is not None or self.to is not None:
+                range_options = {'ss': self.ss, 'to': self.to}
             self.ffmpeg_process, self.ytdlp_process, self.transport_thread, transport_stats = _open_stream(
                 self.url,
                 self.format,
@@ -531,7 +558,8 @@ class StreamAudioGetter(LoopWorkerBase):
                 self.temp_dir,
                 wait_for_video=self.wait_for_video,
                 live_from_start=self.live_from_start,
-                stream_format_diagnostic_file=self.stream_format_diagnostic_file)
+                stream_format_diagnostic_file=self.stream_format_diagnostic_file,
+                **range_options)
             if self.stop_event.is_set():
                 logger.debug('Stream audio getter was stopped while opening its child processes')
                 return
@@ -542,6 +570,7 @@ class StreamAudioGetter(LoopWorkerBase):
                                            output_queue,
                                            source_name='stream ffmpeg',
                                            pacer=self.pacer,
+                                           pad_final_block=bool(range_options),
                                            started_at=transport_stats.started_at,
                                            stop_event=self.stop_event)
             if self.stop_event.is_set():
@@ -594,7 +623,12 @@ class StreamAudioGetter(LoopWorkerBase):
 
 class LocalFileAudioGetter(LoopWorkerBase):
 
-    def __init__(self, file_path: str, realtime: bool = False) -> None:
+    def __init__(self,
+                 file_path: str,
+                 realtime: bool = False,
+                 ss: str | float | None = None,
+                 to: str | float | None = None) -> None:
+        self.ss, self.to = normalize_time_range(ss, to)
         self.file_path = file_path
         self.realtime = realtime
         self.ffmpeg_process = None
@@ -637,12 +671,21 @@ class LocalFileAudioGetter(LoopWorkerBase):
         failed = False
         try:
             try:
+                input_options = {'loglevel': 'panic'}
+                output_options = {}
+                if self.ss is not None:
+                    input_options['ss'] = format_seconds(self.ss)
+                if self.to is not None:
+                    # With input seeking, ffmpeg resets output timestamps;
+                    # express the absolute source endpoint as a duration.
+                    output_options['t'] = format_seconds(self.to - (self.ss or 0))
                 self.ffmpeg_process = (ffmpeg.input(self.file_path,
-                                                    loglevel='panic').output('pipe:',
+                                                    **input_options).output('pipe:',
                                                                              format='f32le',
                                                                              acodec='pcm_f32le',
                                                                              ac=1,
-                                                                             ar=SAMPLE_RATE).run_async(
+                                                                             ar=SAMPLE_RATE,
+                                                                             **output_options).run_async(
                                                                                   pipe_stdin=True,
                                                                                   pipe_stdout=True))
             except ffmpeg.Error as e:
@@ -658,7 +701,7 @@ class LocalFileAudioGetter(LoopWorkerBase):
                               output_queue,
                               source_name='local file ffmpeg',
                               pacer=self.pacer,
-                              pad_final_block=self.realtime,
+                              pad_final_block=self.realtime or self.ss is not None or self.to is not None,
                               stop_event=self.stop_event)
             if self.stop_event.is_set():
                 self.stop()

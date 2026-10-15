@@ -120,6 +120,16 @@ Then open the printed local URL in your browser. All CLI features are available 
 stream-translator-gpt URL [OPTIONS]
 ```
 
+Use `--ss TIME` / `--to TIME` to process a source interval, for example
+`stream-translator-gpt recording.mp3 --ss 00:10:00 --to 00:12:00` (two minutes).
+These are FFmpeg-style positions: `--to` is the absolute end, not a duration. Both options are optional;
+times must be non-negative seconds or `[HH:]MM:SS[.fraction]` (seconds also accept `s`, `ms`, `us`).
+Local files seek before decoding; URL inputs use yt-dlp section downloads and FFmpeg input seeking to avoid
+reading/downloading the entire preceding media where supported. Remote servers, media indexing, and live DVR
+availability determine how much data can be skipped; some extra data around seek points may be needed.
+Output timestamps start at zero for the selected interval. Device input and `--live-from-start` warn and ignore
+both options. `--pacer` works independently of the selected interval.
+
 **Transcription backends** (default is local **Whisper**):
 
 - ```stream-translator-gpt {URL} --language {input_language}```
@@ -205,6 +215,8 @@ requests. `--translation-threads` applies only to the new implementation.
 | `--input-proxy`                    |                                | Use the specified HTTP/HTTPS/SOCKS proxy for yt-dlp, e.g. http://127.0.0.1:7890.                                                                                                                                                                                      |
 | `--wait-for-video [SECONDS]`       | disabled; bare flag: 60        | Wait for a scheduled stream to become available. This is yt-dlp's minimum interval between availability checks; a known schedule may sleep until its start time. Omit the option to disable waiting; pass it without a value to use 60 seconds.                    |
 | `--live-from-start`                | False                          | Ask yt-dlp to download a supported livestream from its beginning instead of the current live edge. This yt-dlp feature is experimental and extractor-dependent.                                                                                                     |
+| `--ss TIME`                       | disabled                       | Start at this source position for local files or URLs; non-negative seconds or `[HH:]MM:SS[.fraction]`. Ignored with a warning for device input or `--live-from-start`. |
+| `--to TIME`                       | disabled                       | Stop at this absolute source position, not a duration; must be greater than `--ss` (or zero). Ignored with a warning for device input or `--live-from-start`. |
 | `--stream-format-diagnostic-file PATH` | disabled                  | Have yt-dlp write allowlisted metadata about the selected stream format to the user-specified path, replacing that file for each stream. This is disabled unless explicitly supplied; no implicit diagnostic file is created.                                      |
 | `--pacer`                          | unlimited                      | Input pacing for URL streams and local files: `unlimited` reads as fast as downstream capacity permits; `realtime` emits one second of decoded audio per second of wall-clock time. Device input is already real-time, so a non-default value is ignored with a warning. |
 | `--device-index`                   |                                | The index of the device that needs to be recorded. If not set, the system default recording device will be used.                                                                                                                                                      |

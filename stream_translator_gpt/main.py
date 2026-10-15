@@ -21,6 +21,7 @@ if __name__ == '__main__':
 
 from .utils.common import ClientPool, SAMPLE_RATE, SAMPLES_PER_FRAME, start_daemon_thread, is_url
 from .getter.audio_getter import DeviceAudioGetter, LocalFileAudioGetter, SoundDeviceAudioGetter, StreamAudioGetter
+from .getter.time_range import normalize_time_range
 from .transcriber.audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
 from .transcriber.modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_STREAM_MAX_SEND_RATE,
                                    ModulateStreamingTranscriber)
@@ -107,6 +108,15 @@ class Config:
 
     live_from_start: Annotated[bool, tyro.conf.FlagCreatePairsOff] = False
     """Ask yt-dlp to download a supported livestream from its beginning instead of the current live edge."""
+
+    ss: Annotated[str | None, tyro.conf.arg(metavar='TIME')] = None
+    """Start at this source position for local files and URL streams (FFmpeg-style non-negative seconds or
+    [HH:]MM:SS[.fraction]). Seek/download only the selected range where supported. Ignored with a warning for device
+    input or --live-from-start."""
+
+    to: Annotated[str | None, tyro.conf.arg(metavar='TIME')] = None
+    """Stop at this absolute source position, not a duration; accepts the same time formats as --ss. Must be later
+    than --ss (or zero if --ss is omitted). Ignored with a warning for device input or --live-from-start."""
 
     pacer: Literal['unlimited', 'realtime'] = 'unlimited'
     """Control decoded audio pacing for URL streams and local files. Unlimited mode reads as fast as downstream
@@ -345,7 +355,26 @@ class Config:
     """Use the specified HTTP/HTTPS/SOCKS proxy for Cqhttp/Discord/Telegram, e.g. http://127.0.0.1:7890."""
 
 
+def _normalize_input_time_range(config: Config):
+    """Ignore incompatible ranges once, or validate before starting any workers."""
+    if config.ss is None and config.to is None:
+        return
+    reasons = []
+    if config.url.lower() == 'device':
+        reasons.append('device input')
+    if config.live_from_start:
+        reasons.append('--live-from-start')
+    if reasons:
+        logger.warning('Ignoring --ss and --to with %s', ' and '.join(reasons))
+        config.ss = config.to = None
+        return
+    normalize_time_range(config.ss, config.to)
+
+
 def _create_audio_getter(config: Config):
+    _normalize_input_time_range(config)
+    time_range = {name: value for name in ('ss', 'to')
+                  if (value := getattr(config, name)) is not None}
     realtime = config.pacer == 'realtime'
     if config.url.lower() == 'device':
         if realtime:
@@ -378,9 +407,10 @@ def _create_audio_getter(config: Config):
             wait_for_video=config.wait_for_video,
             live_from_start=config.live_from_start,
             stream_format_diagnostic_file=config.stream_format_diagnostic_file,
+            **time_range,
         )
     logger.debug('Selected local file audio input with %s pacing', config.pacer)
-    return LocalFileAudioGetter(file_path=config.url, realtime=realtime)
+    return LocalFileAudioGetter(file_path=config.url, realtime=realtime, **time_range)
 
 
 def _transcription_engine_label(config: Config) -> str:
@@ -853,6 +883,12 @@ def _check_ffmpeg(config: Config):
 
 def _validate_and_normalize(config: Config):
     """Check option combinations and normalize values, exiting with an error message on invalid input."""
+    try:
+        _normalize_input_time_range(config)
+    except ValueError as exc:
+        logger.error('%s', exc)
+        sys.exit(1)
+
     if config.openai_translation_api == 'auto':
         config.openai_translation_api = 'chat-completions' if config.openai_base_url else 'responses'
         logger.info('Resolved OpenAI translation API mode to %s', config.openai_translation_api)

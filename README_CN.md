@@ -120,6 +120,15 @@ stream-translator-gpt-webui
 stream-translator-gpt URL [OPTIONS]
 ```
 
+用 `--ss TIME` / `--to TIME` 指定处理区间，例如
+`stream-translator-gpt recording.mp3 --ss 00:10:00 --to 00:12:00`，即处理两分钟。
+语义与 FFmpeg 一致：`--to` 是原音视频中的绝对结束位置，不是持续时长。两个参数都可单独使用；
+时间支持非负秒数或 `[HH:]MM:SS[.小数]`，秒数还可带 `s`、`ms`、`us` 后缀。
+本地文件先 seek 再解码；URL 通过 yt-dlp 区间下载和 FFmpeg 输入 seek，在支持的情况下跳过前面的媒体，
+避免完整读取/下载。具体能节省多少取决于服务器、媒体索引和直播 DVR 支持，定位点附近仍可能需要额外读取。
+输出时间戳从所选区间的零点开始。设备输入或启用 `--live-from-start` 时会警告并忽略这两个参数；
+`--pacer` 可与区间选择同时使用。
+
 **转录后端**（默认使用本地 **Whisper**）：
 
 - ```stream-translator-gpt {网址} --language {输入语言}```
@@ -204,6 +213,8 @@ context 模式串行，否则最多 10 个并发请求。`--translation-threads`
 | `--input-proxy`                    |                                | 为 yt-dlp 指定 HTTP/HTTPS/SOCKS 代理，例如 http://127.0.0.1:7890。                                                                                                            |
 | `--wait-for-video [秒数]`          | 默认关闭；裸参数为 60          | 等待计划直播开始。该值是 yt-dlp 两次可用性检查之间的最短间隔；如果开播时间已知，yt-dlp 可能直接等待到该时间。不传时关闭等待，裸参数使用 60 秒。                               |
 | `--live-from-start`                | False                          | 请求 yt-dlp 从受支持直播的开头开始下载，而不是从当前直播位置开始。该 yt-dlp 功能仍属实验性功能，且仅适用于实现了它的提取器。                                               |
+| `--ss TIME`                       | 默认关闭                       | 本地文件或 URL 的起始位置；支持非负秒数或 `[HH:]MM:SS[.小数]`。设备输入或 `--live-from-start` 下警告并忽略。 |
+| `--to TIME`                       | 默认关闭                       | 原音视频中的绝对结束位置，不是时长；必须大于 `--ss`（未设置时为零）。设备输入或 `--live-from-start` 下警告并忽略。 |
 | `--stream-format-diagnostic-file PATH` | 默认关闭                  | 让 yt-dlp 将所选流格式的白名单元数据写入用户指定路径，并在每条流开始时替换该文件。仅显式传入时启用；未指定时绝不会创建隐式诊断文件。                                      |
 | `--pacer`                          | unlimited                      | URL 流和本地文件的输入速率限制：`unlimited` 按下游处理能力尽快读取，`realtime` 按墙钟时间每秒输出一秒解码音频。设备输入本身已是实时采集，指定非默认值时会警告并忽略。                                                |
 | `--device-index`                   |                                | 需要录制的设备编号。不设置时使用系统默认录音设备。                                                                                                                            |
