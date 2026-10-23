@@ -125,8 +125,8 @@ class AudioTranscriber(LoopWorkerBase):
                 unique_ratio = len(set(tokens)) / len(tokens) if tokens else 1.0
 
                 if zlib_ratio > 1.5 or unique_ratio < 0.6:
-                    logger.warning('Repetitive transcription detected (compression ratio %.2f, unique token ratio %.2f); '
-                                   'resetting transcription context', zlib_ratio, unique_ratio)
+                    logger.info('Repetitive transcription detected (compression ratio %.2f, unique token ratio %.2f); '
+                                'resetting transcription context', zlib_ratio, unique_ratio)
                     self.reset_context()
                     is_repetitive = True
 
