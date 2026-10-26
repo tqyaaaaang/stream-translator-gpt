@@ -13,6 +13,7 @@
 - 使用 **Gemini API** 翻译：[创建 **Google API key**](https://aistudio.google.com/app/apikey)（推荐，Gemini 的 **Flash-Lite** 模型有每分钟 15 条、每日 500 条的免费额度）
 - 使用 **OpenAI Transcription API** 转录或 **GPT API** 翻译：[创建 **OpenAI API key**](https://platform.openai.com/api-keys)（也可以使用任何 **OpenAI 兼容格式**的 API）
 - 使用 **Modulate Multilingual Transcription — Streaming** 需要准备 [**Modulate API key**](https://docs.modulate.ai/guides/authentication)。
+- 通过命令行使用 **ElevenLabs Scribe v2 Realtime** 需要准备 **ElevenLabs API key**。
 
 |                                                                                            命令行                                                                                             |                                                                                         WebUI (deprecated)                                                                             |
 | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
@@ -48,6 +49,7 @@ flowchart LR
         cd("`**OpenAI Transcription API**`")
         ce("`**HuggingFace ASR**`")
         cf("`**Modulate Streaming**`")
+        cg("`**ElevenLabs Scribe Realtime**`")
     end
     subgraph gd["`**翻译**`"]
         direction LR
@@ -67,13 +69,15 @@ flowchart LR
     gb ==> gc
     aa -.-> cf
     ab -.-> cf
+    aa -.-> cg
+    ab -.-> cg
     gc ==> gd
     gd ==> ge
 ```
 
 - **输入**：[**yt-dlp**](https://github.com/yt-dlp/yt-dlp) 从直播流中提取音频；也支持本地媒体文件和电脑设备音频。
-- **音频切片**：基于 [**Silero-VAD**](https://github.com/snakers4/silero-vad) 的动态阈值切片。Modulate 流式后端会直接处理 16 kHz 音频流并绕过 VAD。
-- **转录**：本地使用 [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition)，或远程调用 [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text) / [**Modulate Multilingual Transcription — Streaming**](https://docs.modulate.ai/api-reference/stt/streaming)。
+- **音频切片**：基于 [**Silero-VAD**](https://github.com/snakers4/silero-vad) 的动态阈值切片。Modulate 流式后端会直接处理 16 kHz 音频流并绕过 VAD。 Scribe 同样接收连续音频，本地 VAD 仅决定 manual commit 的边界。
+- **转录**：本地使用 [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition)，或远程调用 [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text) / [**Modulate Multilingual Transcription — Streaming**](https://docs.modulate.ai/api-reference/stt/streaming) / [**ElevenLabs Scribe v2 Realtime**](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime)。
 - **翻译**（可选）：OpenAI 的 [**GPT API**](https://platform.openai.com/docs/overview) 或 Google 的 [**Gemini API**](https://ai.google.dev/gemini-api/docs)。
 - **输出**：打印到**终端**、追加到 UTF-8 **文本文件**，或发送到 **Discord** / **Telegram** / **Cqhttp**。
 
@@ -85,7 +89,7 @@ flowchart LR
 2. **FFmpeg**（已安装可跳过）：
    - Windows: `winget install ffmpeg`
    - Linux (Debian/Ubuntu): `sudo apt install ffmpeg`
-3. 如需**本地转录**（Whisper / Faster-Whisper / SimulStreaming / HuggingFace ASR）时安装；只用 OpenAI Transcription API 或 Modulate Streaming 的话不需要：
+3. 如需**本地转录**（Whisper / Faster-Whisper / SimulStreaming / HuggingFace ASR）时安装；只用 OpenAI Transcription API、Modulate Streaming 或 ElevenLabs Scribe 的话不需要：
    - [在系统上安装 **CUDA**](https://developer.nvidia.com/cuda-downloads)
    - [为 Python 安装 **PyTorch**（CUDA 版）](https://pytorch.org/get-started/locally/)
    - 如需使用 **Faster-Whisper**，[将 **cuDNN** 安装到 CUDA 目录](https://developer.nvidia.com/cudnn-downloads)
@@ -108,7 +112,7 @@ pip install stream-translator-gpt[webui] -U
 
 > **自 2026-10-26 起弃用：** WebUI 不再维护或提供支持。保留原有入口和代码供已有用户使用，后续新功能仅支持命令行。
 
-<!-- WebUI 弃用记录：提交后补充弃用提交和弃用前基线的完整提交链接。 -->
+弃用记录：[弃用提交 `2f8f9d1f6e4b310e90f9f67a2ec2cd5072b78de9`](https://github.com/tqyaaaaang/stream-translator-gpt/commit/2f8f9d1f6e4b310e90f9f67a2ec2cd5072b78de9)；[弃用前最后基线 `62d3fafb26be196f9db6b7c4b46cea8b0d3657a8`](https://github.com/tqyaaaaang/stream-translator-gpt/tree/62d3fafb26be196f9db6b7c4b46cea8b0d3657a8)。
 
 ```
 stream-translator-gpt-webui
@@ -143,12 +147,29 @@ URL 使用 yt-dlp 的 FFmpeg 下载器。HLS/TS 默认快速 seek 到目标附�
 - 以 **Faster-Whisper** 为编码器的 **SimulStreaming**: ```stream-translator-gpt {网址} --language {输入语言} --use-simul-streaming --use-faster-whisper```
 - **OpenAI Transcription API**: ```stream-translator-gpt {网址} --language {输入语言} --use-openai-transcription-api --openai-api-key {你的 OpenAI key}```
 - **Modulate Multilingual Transcription — Streaming**: ```stream-translator-gpt {网址} --use-modulate-transcription-api --modulate-api-key {你的 Modulate key}```
+- **ElevenLabs Scribe v2 Realtime**: ```stream-translator-gpt {网址} --use-elevenlabs-scribe-api --elevenlabs-api-key {你的 ElevenLabs key}```
 - **HuggingFace ASR** 模型（需要 `pip install stream-translator-gpt[hf_asr]`；仅支持 Hugging Face Hub 上 `pipeline_tag` 为 `automatic-speech-recognition` 的模型）: ```stream-translator-gpt {网址} --model {hf_模型名} --use-hf-asr```
 
 Modulate 后端不使用 Silero VAD，而是把 16 kHz 音频直接发送给模型的流式模式；模型完成的每个 utterance 都会成为一个新句子。程序会持续监控 partial result：从当前未提交句子的第一个字（或切断时已存在的后续文字）开始计时，超过 `--modulate-partial-cutoff-seconds` 后，会在随后出现的第一个全角或半角标点处提交当前分段；句子之间的静音不会占用下一句的等待时间。对于 URL 直播流，Modulate 在直播边缘通常按音源速率发送；只要重连重放数据或实时输入队列中仍有积压，就会以最高 1.5 倍音源速率发送来追赶进度。发生意外传输中断时，程序会按指数退避重连；重连成功后，会重放上一个 final 结果之后收到的、最多 10 分钟音频。显式认证、额度和 API 错误不会重试。处理本地文件时，请使用实时播放，让超时判断与媒体时间一致：
 
 ```bash
 stream-translator-gpt {文件路径} --pacer realtime --use-modulate-transcription-api --modulate-api-key {你的 Modulate key}
+```
+
+**ElevenLabs Scribe v2 Realtime（仅支持命令行）**
+
+此后端固定使用 [`scribe_v2_realtime`](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime)、`commit_strategy=manual` 和 `include_timestamps=true`。通过 `--elevenlabs-api-key` 传入密钥，程序不会自动读取 key 文件。16 kHz 单声道 PCM 音频（包括静音）通过同一个 WebSocket 连续发送；本地 Silero VAD 继续使用现有 VAD 和音频长度参数决定何时发送 commit 标记，边界处不会重复发送音频。`--prefix-retention-length` 对此后端无效；`--max-audio-length` 超过 30 秒时会警告并限制为 30 秒。这些调整仅影响 Scribe 后端。
+
+若 commit 区间不足 0.32 秒，会延后边界并继续接收音频，为服务端 0.3 秒的最小提交时长留出余量。EOF 时若尾段不足此长度，仅补充必要的静音；补充部分不计入源音频时长或字幕时间范围。该下限针对 commit 区间，不针对单个网络音频块。
+
+`--pacer realtime` 将 Scribe 的全部发送（包括断线重放）限制为 1 倍音频速度；其他情况下最高按 5 倍速发送以追赶进度，模型的实际处理速度可能变化。只有 committed 转录会进入现有过滤、翻译和输出流程，partial 不会作为最终结果输出。有逐词时间戳时会使用它们；API 可能返回 `words: null`，因此并非每段都有逐词对齐。
+
+Scribe 在同一连接内自行保留上下文，manual commit 不会清空会话上下文。`--transcription-context` 对此后端不额外注入 `previous_text`，也不能关闭模型自身的会话上下文。
+
+`--transcription-keywords` 会作为 Scribe `keyterms` 使用：按逗号分隔、去掉首尾空白和空项，结果为空时不传该参数。超过 50 项时会在 warning 中输出完整列表，然后只发送前 50 项；被选中的单项超过 20 个字符会报错。[ElevenLabs 关键词提示](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/batch/keyterm-prompting)会在基础转录费用上加收 20%。
+
+```bash
+stream-translator-gpt recording.mp3 --use-elevenlabs-scribe-api --elevenlabs-api-key "$ELEVENLABS_API_KEY" --language ja --pacer realtime
 ```
 
 **翻译**（设置 `--translation-prompt` 即启用；根据填写的 API key 自动选择服务商）：
@@ -206,6 +227,7 @@ context 模式串行，否则最多 10 个并发请求。`--translation-threads`
 | `--openai-api-key`                 |                                | GPT 翻译使用的 OpenAI API key；未设置 `--whisper-api-key` 时也作为远程转录的后备 key。多个 key 可用 "," 分隔并轮流使用。                                                       |
 | `--whisper-api-key`                |                                | Whisper 兼容转录端点使用的 API key，会覆盖远程转录使用的 `--openai-api-key`。多个 key 可用 "," 分隔并轮流使用。                                                               |
 | `--modulate-api-key`               |                                | Modulate Multilingual Transcription — Streaming 使用的 API key；启用 `--use-modulate-transcription-api` 时必须设置。                                                        |
+| `--elevenlabs-api-key` | | ElevenLabs Scribe v2 Realtime 的 API key。启用 `--use-elevenlabs-scribe-api` 时必填，不会自动读取 key 文件。 |
 | `--google-api-key`                 |                                | 使用 Gemini 翻译时需要的 Google API key。如果有多个 key，可用 "," 分隔，每个 key 会轮流使用。                                                                                 |
 | `--openai-base-url`                |                                | 自定义 GPT 翻译使用的 OpenAI API 端点；未设置 `--whisper-base-url` 时也作为远程转录的后备端点。                                                                                |
 | `--whisper-base-url`               |                                | 自定义 Whisper 兼容转录 API 使用的端点。                                                                                                                                       |
@@ -223,7 +245,7 @@ context 模式串行，否则最多 10 个并发请求。`--translation-threads`
 | `--to TIME`                       | 默认关闭                       | 原音视频中的绝对结束位置，不是时长；必须大于 `--ss`（未设置时为零）。设备输入或 `--live-from-start` 下警告并忽略。 |
 | `--time-range-strict`             | 默认关闭                       | HLS/TS 从头解码再可靠裁剪，代替可能有分片级偏差的快速 seek；需要读取前面的音频。未指定 `--ss` / `--to`、设备输入或 `--live-from-start` 下警告并忽略。 |
 | `--stream-format-diagnostic-file PATH` | 默认关闭                  | 让 yt-dlp 将所选流格式的白名单元数据写入用户指定路径，并在每条流开始时替换该文件。仅显式传入时启用；未指定时绝不会创建隐式诊断文件。                                      |
-| `--pacer`                          | unlimited                      | URL 流和本地文件的输入速率限制：`unlimited` 按下游处理能力尽快读取，`realtime` 按墙钟时间每秒输出一秒解码音频。设备输入本身已是实时采集，指定非默认值时会警告并忽略。                                                |
+| `--pacer`                          | unlimited                      | URL 流和本地文件的输入速率限制：`unlimited` 按下游处理能力尽快读取，`realtime` 按墙钟时间每秒输出一秒解码音频。设备输入本身已是实时采集，指定非默认值时会警告并忽略。 Scribe 的发送和重放在 `realtime` 下限速 1 倍，其他情况下最高 5 倍。 |
 | `--device-index`                   |                                | 需要录制的设备编号。不设置时使用系统默认录音设备。                                                                                                                            |
 | `--list-devices`                   |                                | 打印所有音频设备信息后退出。                                                                                                                                                  |
 | `--device-recording-interval`      | 0.5                            | 录制间隔越短延迟越低，但会增加 CPU 占用。建议设置在 0.1 到 1.0 之间。                                                                                                         |
@@ -235,11 +257,11 @@ context 模式串行，否则最多 10 个并发请求。`--translation-threads`
 | `--mic`                            |                                | 使用麦克风代替系统音频（电脑正在播放的声音）作为输入。                                                                                                                        |
 | **音频切片选项**                   |
 | `--min-audio-length`               | 0.5                            | 音频切片的最小长度（秒）。                                                                                                                                                    |
-| `--max-audio-length`               | 30.0                           | 音频切片的最大长度（秒）。                                                                                                                                                    |
+| `--max-audio-length`               | 30.0                           | 音频切片的最大长度（秒）。 仅 Scribe 后端会将超过 30 秒的值警告并限制为 30 秒。 |
 | `--target-audio-length`            | 5.0                            | 启用动态静音阈值时（默认开启），程序会尽量将音频切成接近此长度的片段。                                                                                                        |
 | `--continuous-no-speech-threshold` | 1.0                            | 持续无语音达到此秒数时切片。启用动态静音阈值时（默认开启），实际阈值会基于此值动态调整。                                                                                      |
 | `--no-dynamic-no-speech-threshold` |                                | 禁用动态静音阈值（默认开启）。                                                                                                                                                |
-| `--prefix-retention-length`        | 0.5                            | 切片时保留的前缀音频长度。                                                                                                                                                    |
+| `--prefix-retention-length`        | 0.5                            | 切片时保留的前缀音频长度。 对 Scribe 无效；它连续发送音频，不保留重叠前缀。 |
 | `--vad-threshold`                  | 0.35                           | 范围 0~1。此值越高，语音判定越严格。启用动态 VAD 阈值时（默认开启），阈值会基于此值动态调整。                                                                                 |
 | `--no-dynamic-vad-threshold`       |                                | 禁用动态 VAD 阈值（默认开启）。                                                                                                                                               |
 | **转录选项**                       |
@@ -249,6 +271,7 @@ context 模式串行，否则最多 10 个并发请求。`--translation-threads`
 | `--use-simul-streaming`            |                                | 使用 SimulStreaming 代替 Whisper。与 --use-faster-whisper 同时使用时，将以 Faster-Whisper 为编码器运行 SimulStreaming。                                                       |
 | `--use-openai-transcription-api`   |                                | 使用 OpenAI Transcription API 代替本地 Whisper。                                                                                                                              |
 | `--use-modulate-transcription-api` |                                | 使用 Modulate Multilingual Transcription — Streaming，直接流式处理 16 kHz 音频并绕过 Silero VAD。                                                                            |
+| `--use-elevenlabs-scribe-api` | | 使用 ElevenLabs Scribe v2 Realtime，由本地 VAD 手动 commit，并开启时间戳。仅支持命令行。 |
 | `--modulate-partial-cutoff-seconds` | 10.0                           | 从当前未提交句子的第一个字开始超过该秒数后，在随后出现的第一个全角或半角标点处提交；此前的静音不计入等待时间。                                                                        |
 | `--modulate-reconnect-attempts`    | 3                              | Modulate 意外传输中断后的最大重连次数；显式认证、额度和 API 错误不会重试。                                                                                                    |
 | `--modulate-reconnect-backoff-seconds` | 1.0                        | 首次重连等待秒数；后续重试采用指数退避。重连成功后会重放上一个 final 结果之后收到的、最多 10 分钟音频。                                                                       |
@@ -257,8 +280,8 @@ context 模式串行，否则最多 10 个并发请求。`--translation-threads`
 | `--use-hf-asr`                     |                                | 使用 HuggingFace ASR 模型，用 `--model` 指定模型 ID。需要 `pip install stream-translator-gpt[hf_asr]`。                                                                       |
 | `--transcription-filters`          | emoji_filter,repetition_filter | 应用于转录结果的过滤器，用 "," 分隔。目前提供 emoji_filter 和 repetition_filter。                                                                                             |
 | `--language-filters`               |                                | 启用指定语言的转录过滤器，用英文逗号分隔。支持 `en`/`english`、`ja`/`japanese` 和 `zh`/`chinese`（包括 `zh-cn`、`zh-tw`）等别名；不传时默认关闭。                                |
-| `--transcription-keywords`         |                                | 逗号分隔的转录关键词。`gpt-transcribe` 会作为 `keywords` 发送，其他 Whisper 后端会作为初始 prompt 使用。旧的 `--transcription-initial-prompt` 仍可用，但已弃用。              |
-| `--transcription-context`          |                                | 启用转录中的上下文传递，只保留上一条结果；SimulStreaming 和 HuggingFace ASR 不支持文本上下文（默认关闭）。                                                                    |
+| `--transcription-keywords`         |                                | 逗号分隔的转录关键词。`gpt-transcribe` 会作为 `keywords` 发送，其他 Whisper 后端会作为初始 prompt 使用。旧的 `--transcription-initial-prompt` 仍可用，但已弃用。 Scribe 使用 `keyterms`：去空项，超过 50 项时 warning 完整列表后取前 50 项，单项超过 20 字符报错；非空关键词会产生 API 附加费用。 |
+| `--transcription-context`          |                                | 启用转录中的上下文传递，只保留上一条结果；SimulStreaming 和 HuggingFace ASR 不支持文本上下文（默认关闭）。 Scribe 不使用此开关，其连接内上下文由模型管理。 |
 | **翻译选项**                       |
 | `--gpt-model`                      | gpt-5.6-luna                   | OpenAI 的 GPT 模型名，gpt-5.4-nano / gpt-5.4-mini / gpt-5.6-luna / gpt-5.6-terra                                                                                              |
 | `--openai-translation-api`         | auto                           | OpenAI 翻译 API 模式：auto / responses / chat-completions。`auto` 对 OpenAI 官方端点使用 Responses；设置 `--openai-base-url` 时使用 Chat Completions。若自定义端点实现了 `/v1/responses`，请显式选择 `responses`。 |

@@ -222,7 +222,8 @@ class StreamDiagnosticsTest(unittest.TestCase):
         input_builder.output.return_value = output_builder
         transport_thread = mock.Mock()
 
-        with mock.patch('stream_translator_gpt.getter.audio_getter.subprocess.Popen', return_value=ytdlp), \
+        with mock.patch('stream_translator_gpt.getter.audio_getter._log_stream_tool_versions'), \
+                mock.patch('stream_translator_gpt.getter.audio_getter.subprocess.Popen', return_value=ytdlp), \
                 mock.patch('stream_translator_gpt.getter.audio_getter.ffmpeg.input', return_value=input_builder) as ffinput, \
                 mock.patch('stream_translator_gpt.getter.audio_getter.threading.Thread', return_value=transport_thread):
             _open_stream('https://example.test/live', 'ba', None, None, 'workdir')

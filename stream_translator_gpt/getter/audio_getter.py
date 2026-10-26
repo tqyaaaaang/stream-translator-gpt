@@ -224,7 +224,8 @@ def _read_ffmpeg_loop(ffmpeg_process,
                       pacer: _RealtimeAudioPacer | None = None,
                       pad_final_block: bool = False,
                       started_at: float | None = None,
-                      stop_event: threading.Event | None = None):
+                      stop_event: threading.Event | None = None,
+                      preserve_final_block: bool = False):
     complete_blocks = 0
     while True:
         chunks = []
@@ -242,7 +243,7 @@ def _read_ffmpeg_loop(ffmpeg_process,
             logger.debug('%s audio output reached EOF after %d complete block(s)', source_name, complete_blocks)
             break
         valid_sample_count = len(in_bytes) // np.dtype(np.float32).itemsize
-        if len(in_bytes) != byte_size and not (pad_final_block and len(in_bytes) % 4 == 0):
+        if len(in_bytes) != byte_size and not ((pad_final_block or preserve_final_block) and len(in_bytes) % 4 == 0):
             logger.warning('%s returned a short audio block; expected %d bytes, received %d bytes; discarding it',
                            source_name, byte_size, len(in_bytes))
             if reached_eof:
@@ -250,7 +251,7 @@ def _read_ffmpeg_loop(ffmpeg_process,
                 break
             continue
         audio = np.frombuffer(in_bytes, np.float32).flatten()
-        if len(in_bytes) != byte_size:
+        if len(in_bytes) != byte_size and not preserve_final_block:
             expected_samples = byte_size // np.dtype(np.float32).itemsize
             audio = np.pad(audio, (0, expected_samples - len(audio)))
             logger.debug('%s padded its final audio block from %d to %d sample(s)', source_name, valid_sample_count,
@@ -515,7 +516,8 @@ class StreamAudioGetter(LoopWorkerBase):
                  stream_format_diagnostic_file: str | None = None,
                  ss: str | float | None = None,
                  to: str | float | None = None,
-                 time_range_strict: bool = False) -> None:
+                 time_range_strict: bool = False,
+                 preserve_final_block: bool = False) -> None:
         self.ss, self.to, self.time_range_strict = _normalize_getter_time_range(
             ss, to, time_range_strict, live_from_start=live_from_start)
         self.url = url
@@ -523,6 +525,7 @@ class StreamAudioGetter(LoopWorkerBase):
         self.cookies = cookies
         self.proxy = proxy
         self.realtime = realtime
+        self.preserve_final_block = bool(preserve_final_block)
         self.wait_for_video = wait_for_video
         self.live_from_start = live_from_start
         self.stream_format_diagnostic_file = stream_format_diagnostic_file
@@ -597,6 +600,7 @@ class StreamAudioGetter(LoopWorkerBase):
                 return
             if self.realtime:
                 self.pacer = _RealtimeAudioPacer(self.stop_event, source_description='stream playback')
+            final_block_options = {'preserve_final_block': True} if self.preserve_final_block else {}
             pcm_blocks = _read_ffmpeg_loop(self.ffmpeg_process,
                                            self.byte_size,
                                            output_queue,
@@ -604,7 +608,8 @@ class StreamAudioGetter(LoopWorkerBase):
                                            pacer=self.pacer,
                                            pad_final_block=bool(range_options),
                                            started_at=transport_stats.started_at,
-                                           stop_event=self.stop_event)
+                                           stop_event=self.stop_event,
+                                           **final_block_options)
             if self.stop_event.is_set():
                 logger.debug('Stream audio getter stopped after %d PCM block(s)', pcm_blocks)
                 return
@@ -661,10 +666,12 @@ class LocalFileAudioGetter(LoopWorkerBase):
                  realtime: bool = False,
                  ss: str | float | None = None,
                  to: str | float | None = None,
-                 time_range_strict: bool = False) -> None:
+                 time_range_strict: bool = False,
+                 preserve_final_block: bool = False) -> None:
         self.ss, self.to, self.time_range_strict = _normalize_getter_time_range(ss, to, time_range_strict)
         self.file_path = file_path
         self.realtime = realtime
+        self.preserve_final_block = bool(preserve_final_block)
         self.ffmpeg_process = None
         self.stop_event = threading.Event()
         self.started = threading.Event()
@@ -729,13 +736,15 @@ class LocalFileAudioGetter(LoopWorkerBase):
                 self.stop()
             if self.realtime:
                 self.pacer = _RealtimeAudioPacer(self.stop_event)
+            final_block_options = {'preserve_final_block': True} if self.preserve_final_block else {}
             _read_ffmpeg_loop(self.ffmpeg_process,
                               self.byte_size,
                               output_queue,
                               source_name='local file ffmpeg',
                               pacer=self.pacer,
                               pad_final_block=self.realtime or self.ss is not None or self.to is not None,
-                              stop_event=self.stop_event)
+                              stop_event=self.stop_event,
+                              **final_block_options)
             if self.stop_event.is_set():
                 self.stop()
             return_code = _wait_for_process(self.ffmpeg_process, 'local file ffmpeg')

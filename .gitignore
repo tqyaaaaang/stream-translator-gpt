@@ -103,6 +103,7 @@ celerybeat.pid
 
 # Environments
 .env
+.elevenlabs.key
 .venv
 env/
 venv/

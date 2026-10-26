@@ -25,6 +25,7 @@ from .getter.time_range import normalize_time_range, normalize_time_range_strict
 from .transcriber.audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
 from .transcriber.modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_STREAM_MAX_SEND_RATE,
                                    ModulateStreamingTranscriber)
+from .transcriber.elevenlabs_transcriber import ElevenLabsScribeTranscriber
 from .exporter.result_exporter import ResultExporter
 from .utils.logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
 from . import __version__
@@ -33,6 +34,7 @@ from . import __version__
 logger = logging.getLogger('main')
 
 DEFAULT_WAIT_FOR_VIDEO_SECONDS = 60
+ELEVENLABS_INPUT_QUEUE_SECONDS = 600
 
 _LEGACY_LANGUAGE_FILTER_ALIASES = {
     'en': 'en',
@@ -62,6 +64,9 @@ class Config:
 
     modulate_api_key: str | None = None
     """API key for Modulate multilingual streaming transcription."""
+
+    elevenlabs_api_key: str | None = None
+    """API key for ElevenLabs Scribe v2 realtime transcription."""
 
     google_api_key: str | None = None
     """Google API key if using Gemini translation. If you have multiple keys, you can separate them with "," and each
@@ -126,7 +131,8 @@ class Config:
     pacer: Literal['unlimited', 'realtime'] = 'unlimited'
     """Control decoded audio pacing for URL streams and local files. Unlimited mode reads as fast as downstream
     capacity permits; realtime emits one second of decoded audio per second of wall-clock time. Device input ignores this
-    option and logs a warning because capture is already paced by the audio device."""
+    option and logs a warning because capture is already paced by the audio device. ElevenLabs Scribe additionally caps
+    API sending (including replay) at 1x in realtime mode and 5x otherwise."""
 
     device_index: int | None = None
     """The index of the device that needs to be recorded. If not set, the system default recording device will be
@@ -163,7 +169,7 @@ class Config:
     """Minimum slice audio length in seconds."""
 
     max_audio_length: float = 30.0
-    """Maximum slice audio length in seconds."""
+    """Maximum slice audio length in seconds. ElevenLabs Scribe warns and caps values above 30 seconds."""
 
     target_audio_length: float = 5.0
     """When dynamic no speech threshold is enabled (enabled by default), the program will slice the audio as close to
@@ -178,7 +184,7 @@ class Config:
     --no-dynamic-no-speech-threshold."""
 
     prefix_retention_length: float = 0.5
-    """The length of the retention prefix audio during slicing."""
+    """The length of the retention prefix audio during slicing. Not used by ElevenLabs' continuous audio stream."""
 
     vad_threshold: float = 0.35
     """Range 0~1. The higher this value, the stricter the speech judgment. If dynamic VAD threshold is enabled (enabled
@@ -209,6 +215,9 @@ class Config:
     use_modulate_transcription_api: bool = False
     """Use Modulate multilingual streaming transcription. Audio is sent directly without VAD slicing."""
 
+    use_elevenlabs_scribe_api: bool = False
+    """Use ElevenLabs Scribe v2 realtime transcription with local VAD deciding manual commits."""
+
     modulate_partial_cutoff_seconds: float = 10.0
     """After a Modulate partial utterance has remained open for longer than this many seconds, force a new output
     segment at the next newly observed full-width or half-width punctuation mark."""
@@ -238,11 +247,14 @@ class Config:
 
     transcription_keywords: str | None = None
     """Comma-separated transcription keywords. OpenAI gpt-transcribe sends them as keywords; other Whisper backends
-    use them as an initial prompt. SimulStreaming uses them only during initialization; HuggingFace ASR ignores them."""
+    use them as an initial prompt. SimulStreaming uses them only during initialization; HuggingFace ASR ignores them.
+    ElevenLabs Scribe sends non-empty lists as paid keyterms (first 50, at most 20 characters each); empty lists omit
+    the keyterms parameter entirely."""
 
     transcription_context: bool = False
     """Pass the previous transcription result as context. Only one result is retained. SimulStreaming and HuggingFace
-    ASR do not support text context propagation. Enable with --transcription-context, disabled by default."""
+    ASR do not support text context propagation. ElevenLabs manages its own session context and does not use this flag
+    to inject previous text. Enable with --transcription-context, disabled by default."""
 
     gpt_model: str = 'gpt-5.6-luna'
     """OpenAI's GPT model name, gpt-5.4-nano / gpt-5.4-mini / gpt-5.6-luna / gpt-5.6-terra."""
@@ -406,6 +418,8 @@ def _create_audio_getter(config: Config):
             debug_clip_duration=config.device_audio_debug_clip_duration,
             debug_max_clips=config.device_audio_debug_max_clips,
         )
+    if config.use_elevenlabs_scribe_api:
+        time_range['preserve_final_block'] = True
     if is_url(config.url):
         logger.debug('Selected stream audio input')
         return StreamAudioGetter(
@@ -425,6 +439,8 @@ def _create_audio_getter(config: Config):
 
 def _transcription_engine_label(config: Config) -> str:
     """Return the concise user-facing name of the selected transcription backend."""
+    if config.use_elevenlabs_scribe_api:
+        return 'ElevenLabs Scribe v2 Realtime'
     if config.use_modulate_transcription_api:
         return 'Modulate'
     if config.use_simul_streaming:
@@ -527,8 +543,12 @@ def run(config: Config):
 
     # Init queues
     modulate_buffer_chunks = math.ceil(MODULATE_INPUT_QUEUE_SECONDS * SAMPLE_RATE / SAMPLES_PER_FRAME)
-    getter_to_slicer_queue = (queue.Queue(maxsize=modulate_buffer_chunks)
-                              if config.use_modulate_transcription_api else queue.SimpleQueue())
+    if config.use_elevenlabs_scribe_api:
+        scribe_buffer_chunks = math.ceil(ELEVENLABS_INPUT_QUEUE_SECONDS * SAMPLE_RATE / SAMPLES_PER_FRAME)
+        getter_to_slicer_queue = queue.Queue(maxsize=scribe_buffer_chunks)
+    else:
+        getter_to_slicer_queue = (queue.Queue(maxsize=modulate_buffer_chunks)
+                                  if config.use_modulate_transcription_api else queue.SimpleQueue())
     slicer_to_transcriber_queue = queue.SimpleQueue()
     transcriber_to_translator_queue = queue.SimpleQueue()
     translator_to_exporter_queue = queue.SimpleQueue() if config.translation_prompt else transcriber_to_translator_queue
@@ -537,7 +557,7 @@ def run(config: Config):
     with ThreadPoolExecutor(thread_name_prefix='initializer') as executor:
 
         audio_getter_future = executor.submit(_create_audio_getter, config)
-        if config.use_modulate_transcription_api:
+        if config.use_modulate_transcription_api or config.use_elevenlabs_scribe_api:
             slicer_future = None
         else:
             # Keep the VAD dependency out of the Modulate path entirely.
@@ -563,7 +583,25 @@ def run(config: Config):
                 'use_history_context': config.transcription_context,
                 'transcription_keywords': config.transcription_keywords,
             }
-            if config.use_modulate_transcription_api:
+            if config.use_elevenlabs_scribe_api:
+                logger.debug('Selected ElevenLabs Scribe v2 realtime transcription backend')
+                return ElevenLabsScribeTranscriber(
+                    api_key=config.elevenlabs_api_key,
+                    language=config.language,
+                    proxy=config.processing_proxy,
+                    verify_ssl=config.verify_ssl,
+                    max_audio_send_rate=1.0 if config.pacer == 'realtime' else 5.0,
+                    min_audio_length=config.min_audio_length,
+                    max_audio_length=config.max_audio_length,
+                    target_audio_length=config.target_audio_length,
+                    continuous_no_speech_threshold=config.continuous_no_speech_threshold,
+                    dynamic_no_speech_threshold=config.dynamic_no_speech_threshold,
+                    prefix_retention_length=config.prefix_retention_length,
+                    vad_threshold=config.vad_threshold,
+                    dynamic_vad_threshold=config.dynamic_vad_threshold,
+                    **common_args,
+                )
+            elif config.use_modulate_transcription_api:
                 logger.debug('Selected Modulate streaming transcription backend')
                 return ModulateStreamingTranscriber(
                     api_key=config.modulate_api_key,
@@ -712,7 +750,9 @@ def run(config: Config):
             transcriber.loop,
             name='transcriber',
             on_error=handle_worker_error,
-            input_queue=(getter_to_slicer_queue if config.use_modulate_transcription_api else slicer_to_transcriber_queue),
+            input_queue=(getter_to_slicer_queue
+                         if config.use_modulate_transcription_api or config.use_elevenlabs_scribe_api
+                         else slicer_to_transcriber_queue),
             output_queue=transcriber_to_translator_queue,
         )
         pipeline_threads.append(transcriber_thread)
@@ -941,7 +981,7 @@ def _validate_and_normalize(config: Config):
             logger.error('%s must be %d or greater', option, minimum)
             sys.exit(1)
 
-    if config.model.endswith('.en'):
+    if not config.use_elevenlabs_scribe_api and config.model.endswith('.en'):
         if config.model == 'large.en':
             logger.error('English model does not have large model, please choose from '
                          '{tiny.en, small.en, medium.en}')
@@ -988,19 +1028,40 @@ def _validate_and_normalize(config: Config):
     if config.use_modulate_transcription_api:
         transcription_encoder_flag_num += 1
         transcription_decoder_flag_num += 1
+    if config.use_elevenlabs_scribe_api:
+        transcription_encoder_flag_num += 1
+        transcription_decoder_flag_num += 1
     if config.use_hf_asr:
         transcription_encoder_flag_num += 1
         transcription_decoder_flag_num += 1
     if transcription_encoder_flag_num > 1:
-        logger.error('Cannot combine Faster Whisper, OpenAI Transcription API, Modulate or HuggingFace ASR backends')
+        logger.error('Cannot combine Faster Whisper, OpenAI Transcription API, Modulate, ElevenLabs Scribe or '
+                     'HuggingFace ASR backends')
         sys.exit(1)
     if transcription_decoder_flag_num > 1:
-        logger.error('Cannot combine SimulStreaming, OpenAI Transcription API, Modulate or HuggingFace ASR backends')
+        logger.error('Cannot combine SimulStreaming, OpenAI Transcription API, Modulate, ElevenLabs Scribe or '
+                     'HuggingFace ASR backends')
         sys.exit(1)
 
     if config.use_openai_transcription_api and not (config.whisper_api_key or config.openai_api_key):
         logger.error('Please fill in the Whisper API key or OpenAI API key when enabling remote transcription')
         sys.exit(1)
+
+    if config.use_elevenlabs_scribe_api:
+        if not (config.elevenlabs_api_key or '').strip():
+            logger.error('Please fill in the ElevenLabs API key when enabling Scribe realtime transcription')
+            sys.exit(1)
+        if (not math.isfinite(config.min_audio_length) or config.min_audio_length <= 0
+                or not math.isfinite(config.max_audio_length) or config.max_audio_length <= 0):
+            logger.error('ElevenLabs Scribe minimum and maximum audio lengths must be finite and greater than zero')
+            sys.exit(1)
+        if config.max_audio_length > 30:
+            logger.warning('ElevenLabs Scribe limits local audio commits to 30 seconds; reducing '
+                           '--max-audio-length from %.3f to 30', config.max_audio_length)
+            config.max_audio_length = 30.0
+        if config.min_audio_length > config.max_audio_length:
+            logger.error('ElevenLabs Scribe minimum audio length must not exceed the maximum audio length')
+            sys.exit(1)
 
     if config.use_modulate_transcription_api:
         if not (config.modulate_api_key or '').strip():

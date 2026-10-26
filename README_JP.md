@@ -13,6 +13,7 @@
 - **Gemini API** で翻訳する場合：[**Google API** キーを作成](https://aistudio.google.com/app/apikey)（おすすめ。Gemini の **Flash-Lite** モデルには毎分 15 回・毎日 500 回の無料枠があります）
 - **OpenAI Transcription API** で文字起こし、または **GPT API** で翻訳する場合：[**OpenAI API** キーを作成](https://platform.openai.com/api-keys)（**OpenAI 互換の API** も利用できます）
 - **Modulate Multilingual Transcription — Streaming** を使うには [**Modulate API キー**](https://docs.modulate.ai/guides/authentication)が必要です。
+- コマンドラインで **ElevenLabs Scribe v2 Realtime** を使うには **ElevenLabs API キー**が必要です。
 
 |                                                                                        コマンドライン                                                                                         |                                                                                         WebUI (deprecated)                                                                             |
 | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
@@ -48,6 +49,7 @@ flowchart LR
         cd("`**OpenAI Transcription API**`")
         ce("`**HuggingFace ASR**`")
         cf("`**Modulate Streaming**`")
+        cg("`**ElevenLabs Scribe Realtime**`")
     end
     subgraph gd["`**翻訳**`"]
         direction LR
@@ -67,13 +69,15 @@ flowchart LR
     gb ==> gc
     aa -.-> cf
     ab -.-> cf
+    aa -.-> cg
+    ab -.-> cg
     gc ==> gd
     gd ==> ge
 ```
 
 - **入力**：[**yt-dlp**](https://github.com/yt-dlp/yt-dlp) がライブストリームから音声を抽出。ローカルメディアファイルや PC のデバイス音声にも対応。
-- **音声スライシング**：[**Silero-VAD**](https://github.com/snakers4/silero-vad) に基づく動的しきい値スライシング。Modulate ストリーミングバックエンドは 16 kHz 音声ストリームを直接処理し、VAD をバイパスします。
-- **文字起こし**：ローカルで [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition)、またはリモートで [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text) / [**Modulate Multilingual Transcription — Streaming**](https://docs.modulate.ai/api-reference/stt/streaming) を利用。
+- **音声スライシング**：[**Silero-VAD**](https://github.com/snakers4/silero-vad) に基づく動的しきい値スライシング。Modulate ストリーミングバックエンドは 16 kHz 音声ストリームを直接処理し、VAD をバイパスします。 Scribe も連続音声を受信し、ローカル VAD は manual commit の境界だけを決定します。
+- **文字起こし**：ローカルで [**Whisper**](https://github.com/openai/whisper) / [**Faster-Whisper**](https://github.com/SYSTRAN/faster-whisper) / [**SimulStreaming**](https://github.com/ufal/SimulStreaming) / [**HuggingFace ASR**](https://huggingface.co/models?pipeline_tag=automatic-speech-recognition)、またはリモートで [**OpenAI Transcription API**](https://platform.openai.com/docs/guides/speech-to-text) / [**Modulate Multilingual Transcription — Streaming**](https://docs.modulate.ai/api-reference/stt/streaming) / [**ElevenLabs Scribe v2 Realtime**](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime) を利用。
 - **翻訳**（オプション）：OpenAI の [**GPT API**](https://platform.openai.com/docs/overview) または Google の [**Gemini API**](https://ai.google.dev/gemini-api/docs)。
 - **出力**：**ターミナル**に出力、UTF-8 **テキストファイル**に追記、または **Discord** / **Telegram** / **Cqhttp** に送信。
 
@@ -85,7 +89,7 @@ flowchart LR
 2. **FFmpeg**（インストール済みならスキップ）：
    - Windows: `winget install ffmpeg`
    - Linux (Debian/Ubuntu): `sudo apt install ffmpeg`
-3. **ローカル文字起こし**（Whisper / Faster-Whisper / SimulStreaming / HuggingFace ASR）を使う場合のみ — OpenAI Transcription API または Modulate Streaming だけを使うなら不要：
+3. **ローカル文字起こし**（Whisper / Faster-Whisper / SimulStreaming / HuggingFace ASR）を使う場合のみ — OpenAI Transcription API、Modulate Streaming、ElevenLabs Scribe だけを使うなら不要：
    - [システムに **CUDA** をインストール](https://developer.nvidia.com/cuda-downloads)
    - [Python に **PyTorch**（CUDA 版）をインストール](https://pytorch.org/get-started/locally/)
    - **Faster-Whisper** を使う場合は [**cuDNN** を CUDA ディレクトリにインストール](https://developer.nvidia.com/cudnn-downloads)
@@ -108,7 +112,7 @@ pip install stream-translator-gpt[webui] -U
 
 > **2026-10-26 より非推奨：** WebUI の保守・サポートを終了しました。既存ユーザー向けに起動コマンドとコードは残しますが、今後の新機能はコマンドラインのみをサポートします。
 
-<!-- WebUI 廃止履歴：コミット後に、非推奨化コミットと直前の基準コミットへの完全なリンクを追加する。 -->
+非推奨化の履歴：[非推奨化コミット `2f8f9d1f6e4b310e90f9f67a2ec2cd5072b78de9`](https://github.com/tqyaaaaang/stream-translator-gpt/commit/2f8f9d1f6e4b310e90f9f67a2ec2cd5072b78de9)、[非推奨化直前の基準コミット `62d3fafb26be196f9db6b7c4b46cea8b0d3657a8`](https://github.com/tqyaaaaang/stream-translator-gpt/tree/62d3fafb26be196f9db6b7c4b46cea8b0d3657a8)。
 
 ```
 stream-translator-gpt-webui
@@ -145,12 +149,29 @@ URL は yt-dlp の FFmpeg ダウンローダーを使います。HLS/TS はデ�
 - **Faster-Whisper** をエンコーダーとする **SimulStreaming**: ```stream-translator-gpt {URL} --language {入力言語} --use-simul-streaming --use-faster-whisper```
 - **OpenAI Transcription API**: ```stream-translator-gpt {URL} --language {入力言語} --use-openai-transcription-api --openai-api-key {OpenAI キー}```
 - **Modulate Multilingual Transcription — Streaming**: ```stream-translator-gpt {URL} --use-modulate-transcription-api --modulate-api-key {Modulate キー}```
+- **ElevenLabs Scribe v2 Realtime**: ```stream-translator-gpt {URL} --use-elevenlabs-scribe-api --elevenlabs-api-key {ElevenLabs キー}```
 - **HuggingFace ASR** モデル（`pip install stream-translator-gpt[hf_asr]` が必要。Hugging Face Hub で `pipeline_tag` が `automatic-speech-recognition` のモデルのみ対応）: ```stream-translator-gpt {URL} --model {HF モデル名} --use-hf-asr```
 
 Modulate バックエンドは Silero VAD を使わず、16 kHz 音声をモデルのストリーミングモードへ直接送信します。モデルが完了した各 utterance は新しい文になります。partial result を継続的に監視し、現在の未確定文の最初の文字（または分割時に既に存在する後続テキスト）から `--modulate-partial-cutoff-seconds` を超えると、その後に現れる最初の全角または半角の句読点で現在の区間を確定します。文と文の間の無音時間は、次の文の待機時間には含まれません。URL のライブストリームでは、ライブエッジにいる間は通常ソースの速度で Modulate へ送信し、再接続時のリプレイデータまたはライブ入力キューに滞留がある間は、追いつくまで最大 1.5 倍速で送信します。予期しない通信切断時は指数バックオフで再接続し、成功後に直近の final 結果以降に受信した音声を最大 10 分間リプレイします。明示的な認証、クォータ、および API エラーは再試行しません。ローカルファイルでは、タイムアウト判定をメディアの時間軸に合わせるため、リアルタイム再生を使用してください：
 
 ```bash
 stream-translator-gpt {ファイルパス} --pacer realtime --use-modulate-transcription-api --modulate-api-key {Modulate キー}
+```
+
+**ElevenLabs Scribe v2 Realtime（CLI のみ）**
+
+このバックエンドは [`scribe_v2_realtime`](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime)、`commit_strategy=manual`、`include_timestamps=true` を使用します。キーは `--elevenlabs-api-key` で指定してください。キーファイルは自動では読み込みません。無音を含む 16 kHz モノラル PCM を同じ WebSocket 接続へ連続送信し、既存の VAD・音声長オプションを使うローカル Silero VAD が commit マーカーのタイミングを決めます。境界の音声は重複送信しません。`--prefix-retention-length` はこのバックエンドでは無効で、`--max-audio-length` が 30 秒を超える場合は警告し、30 秒に制限します。これらの変更は Scribe のみに適用されます。
+
+commit 区間が 0.32 秒未満の場合は十分な音声が届くまで境界を遅らせ、サーバーの最小 commit 長である 0.3 秒に余裕を持たせます。EOF の末尾が短い場合は必要な無音だけを追加します。この無音は元の音声長や字幕の時間範囲には含めません。この下限は commit 区間に適用され、個々のネットワーク音声チャンクには適用されません。
+
+`--pacer realtime` は再接続時の再送を含め、Scribe への全送信を音声の 1 倍速に制限します。それ以外は遅れを取り戻すため最大 5 倍速で送信しますが、モデルの実際の処理速度は変動します。確定済みの committed のみを既存のフィルタリング・翻訳・出力処理へ渡し、partial は最終結果として出力しません。単語タイムスタンプがあれば利用しますが、API が `words: null` を返す場合もあり、すべての区間の単語単位アラインメントは保証されません。
+
+Scribe は接続内のコンテキストを保持し、manual commit でそのコンテキストは消去されません。`--transcription-context` は Scribe に `previous_text` を追加せず、モデル自身のコンテキストを無効にすることもありません。
+
+`--transcription-keywords` は Scribe の `keyterms` として使用します。カンマで分割し、前後の空白と空項目を除去し、空になった場合はパラメータを送信しません。50 項目を超える場合は完全な一覧を warning に記録して先頭 50 項目のみを送信し、選択された項目が 20 文字を超える場合はエラーにします。[ElevenLabs のキーワード提示](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/batch/keyterm-prompting)には基本文字起こし料金の 20% が追加されます。
+
+```bash
+stream-translator-gpt recording.mp3 --use-elevenlabs-scribe-api --elevenlabs-api-key "$ELEVENLABS_API_KEY" --language ja --pacer realtime
 ```
 
 **翻訳**（`--translation-prompt` を設定すると有効になり、記入した API キーに応じてプロバイダが選ばれます）：
@@ -208,6 +229,7 @@ context モードは逐次処理、それ以外は最大 10 リクエストで�
 | `--openai-api-key`                 |                                | GPT 翻訳用の OpenAI API キー。`--whisper-api-key` 未指定時はリモート文字起こしにも使用されます。複数のキーは "," 区切りで順番に使用されます。                                                                           |
 | `--whisper-api-key`                |                                | Whisper 互換文字起こしエンドポイント用の API キー。リモート文字起こしでは `--openai-api-key` より優先されます。                                                                                                         |
 | `--modulate-api-key`               |                                | Modulate Multilingual Transcription — Streaming 用の API キー。`--use-modulate-transcription-api` を有効にする場合は必須です。                                                                                          |
+| `--elevenlabs-api-key` | | ElevenLabs Scribe v2 Realtime の API キー。`--use-elevenlabs-scribe-api` の使用時に必須です。キーファイルは自動で読み込みません。 |
 | `--google-api-key`                 |                                | Gemini 翻訳を使う場合の Google API キー。複数ある場合は "," で区切ると順番に使用されます。                                                                                                                                 |
 | `--openai-base-url`                |                                | GPT 翻訳用の OpenAI API エンドポイント。`--whisper-base-url` 未指定時はリモート文字起こしにも使用されます。                                                                                                                               |
 | `--whisper-base-url`               |                                | Whisper 互換文字起こし API が使用するエンドポイントをカスタマイズ。                                                                                                                                                         |
@@ -225,7 +247,7 @@ context モードは逐次処理、それ以外は最大 10 リクエストで�
 | `--to TIME`                       | 無効                           | 長さではなく元のメディア上の絶対終了位置。`--ss`（未指定ならゼロ）より後が必要です。デバイス入力や `--live-from-start` では警告後に無視します。 |
 | `--time-range-strict`             | 無効                           | HLS/TS を先頭から読み込んでデコードし、確実に切り出します。既定の高速シークはセグメント単位でずれる場合があります。`--ss` / `--to` がない場合、デバイス入力、`--live-from-start` では警告後に無視します。 |
 | `--stream-format-diagnostic-file PATH` | 無効                      | 選択したストリーム形式の許可リスト方式メタデータをユーザー指定パスへ書き込み、ストリームごとにそのファイルを置き換えます。明示指定時のみ有効で、未指定時に暗黙の診断ファイルは作成されません。          |
-| `--pacer`                          | unlimited                      | URL ストリームとローカルファイルの入力ペーシング。`unlimited` は下流の処理能力に応じて可能な限り高速に読み込み、`realtime` は実時間1秒ごとにデコード音声1秒分を出力します。デバイス入力は元からリアルタイムなので、非デフォルト値は警告後に無視されます。 |
+| `--pacer`                          | unlimited                      | URL ストリームとローカルファイルの入力ペーシング。`unlimited` は下流の処理能力に応じて可能な限り高速に読み込み、`realtime` は実時間1秒ごとにデコード音声1秒分を出力します。デバイス入力は元からリアルタイムなので、非デフォルト値は警告後に無視されます。 Scribe の送信・再送は `realtime` で 1 倍速、それ以外で最大 5 倍速です。 |
 | `--device-index`                   |                                | 録音するデバイスの番号。未設定の場合はシステムデフォルトの録音デバイスを使用。                                                                                                                                             |
 | `--list-devices`                   |                                | すべてのオーディオデバイス情報を表示して終了。                                                                                                                                                                             |
 | `--device-recording-interval`      | 0.5                            | 録音間隔が短いほど遅延は低くなりますが、CPU 使用率が上がります。0.1〜1.0 の間を推奨。                                                                                                                                      |
@@ -237,11 +259,11 @@ context モードは逐次処理、それ以外は最大 10 リクエストで�
 | `--mic`                            |                                | システム音声（ループバック）の代わりにマイクを使用。                                                                                                                                                                       |
 | **音声スライシングオプション**     |
 | `--min-audio-length`               | 0.5                            | 音声スライスの最小長（秒）。                                                                                                                                                                                               |
-| `--max-audio-length`               | 30.0                           | 音声スライスの最大長（秒）。                                                                                                                                                                                               |
+| `--max-audio-length`               | 30.0                           | 音声スライスの最大長（秒）。 Scribe のみ、30 秒を超える値は警告後に 30 秒へ制限します。 |
 | `--target-audio-length`            | 5.0                            | 動的無音しきい値が有効な場合（デフォルトで有効）、この長さに近くなるように音声をスライスします。                                                                                                                           |
 | `--continuous-no-speech-threshold` | 1.0                            | この秒数の間無音が続くとスライスします。動的無音しきい値が有効な場合（デフォルトで有効）、実際のしきい値はこの値を基に動的に調整されます。                                                                                 |
 | `--no-dynamic-no-speech-threshold` |                                | 動的無音しきい値を無効化（デフォルトで有効）。                                                                                                                                                                             |
-| `--prefix-retention-length`        | 0.5                            | スライス時に保持するプレフィックス音声の長さ。                                                                                                                                                                             |
+| `--prefix-retention-length`        | 0.5                            | スライス時に保持するプレフィックス音声の長さ。 Scribe では無効です。重複なしの連続音声を送信します。 |
 | `--vad-threshold`                  | 0.35                           | 範囲 0〜1。値が高いほど音声判定が厳しくなります。動的 VAD しきい値が有効な場合（デフォルトで有効）、しきい値はこの値を基に動的に調整されます。                                                                             |
 | `--no-dynamic-vad-threshold`       |                                | 動的 VAD しきい値を無効化（デフォルトで有効）。                                                                                                                                                                            |
 | **文字起こしオプション**           |
@@ -251,6 +273,7 @@ context モードは逐次処理、それ以外は最大 10 リクエストで�
 | `--use-simul-streaming`            |                                | Whisper の代わりに SimulStreaming を使用。--use-faster-whisper と併用すると、Faster-Whisper をエンコーダーとした SimulStreaming が使用されます。                                                                           |
 | `--use-openai-transcription-api`   |                                | ローカル Whisper の代わりに OpenAI Transcription API を使用。                                                                                                                                                              |
 | `--use-modulate-transcription-api` |                                | Modulate Multilingual Transcription — Streaming を使用し、16 kHz 音声を直接ストリーミングして Silero VAD をバイパスします。                                                                                               |
+| `--use-elevenlabs-scribe-api` | | ElevenLabs Scribe v2 Realtime を使用し、ローカル VAD による manual commit とタイムスタンプを有効にします。CLI のみ。 |
 | `--modulate-partial-cutoff-seconds` | 10.0                           | 現在の未確定文の最初の文字からこの秒数を超えると、その後の最初の全角または半角の句読点で確定します。それ以前の無音時間は含まれません。                                                                      |
 | `--modulate-reconnect-attempts`    | 3                              | Modulate の予期しない通信切断後に行う再接続の最大試行回数です。明示的な認証、クォータ、および API エラーは再試行しません。                                                                                                 |
 | `--modulate-reconnect-backoff-seconds` | 1.0                        | 最初の再接続までの待機秒数です。以降は指数バックオフを使用し、再接続後は直近の final 結果以降の音声を最大 10 分間リプレイします。                                                                                           |
@@ -259,8 +282,8 @@ context モードは逐次処理、それ以外は最大 10 リクエストで�
 | `--use-hf-asr`                     |                                | HuggingFace ASR モデルを使用。`--model` でモデル ID を指定。`pip install stream-translator-gpt[hf_asr]` が必要。                                                                                                           |
 | `--transcription-filters`          | emoji_filter,repetition_filter | 文字起こし結果に適用するフィルター（"," 区切り）。emoji_filter と repetition_filter を提供しています。                                                                                                                     |
 | `--language-filters`               |                                | 有効にする言語別文字起こしフィルターをカンマ区切りで指定します。`en`/`english`、`ja`/`japanese`、`zh`/`chinese`（`zh-cn`、`zh-tw` を含む）に対応し、省略時は無効です。                                                       |
-| `--transcription-keywords`         |                                | カンマ区切りの文字起こしキーワード。`gpt-transcribe` では `keywords`、その他の Whisper バックエンドでは初期プロンプトとして使用。旧 `--transcription-initial-prompt` は非推奨エイリアスとして利用可能。                    |
-| `--transcription-context`          |                                | 直前の文字起こし結果をコンテキストとして渡します。保持するのは 1 件のみで、SimulStreaming と HuggingFace ASR はテキストコンテキストに非対応です（デフォルト無効）。                                                        |
+| `--transcription-keywords`         |                                | カンマ区切りの文字起こしキーワード。`gpt-transcribe` では `keywords`、その他の Whisper バックエンドでは初期プロンプトとして使用。旧 `--transcription-initial-prompt` は非推奨エイリアスとして利用可能。 Scribe は `keyterms` を使用し、空項目を除去します。50 項目超は全一覧を warning に記録して先頭 50 項目に制限し、1 項目 20 文字超はエラーになります。空でないキーワードには API 追加料金がかかります。 |
+| `--transcription-context`          |                                | 直前の文字起こし結果をコンテキストとして渡します。保持するのは 1 件のみで、SimulStreaming と HuggingFace ASR はテキストコンテキストに非対応です（デフォルト無効）。 Scribe はこのオプションを使わず、接続内コンテキストはモデルが管理します。 |
 | **翻訳オプション**                 |
 | `--gpt-model`                      | gpt-5.6-luna                   | OpenAI の GPT モデル名。gpt-5.4-nano / gpt-5.4-mini / gpt-5.6-luna / gpt-5.6-terra                                                                                                                                         |
 | `--openai-translation-api`         | auto                           | OpenAI 翻訳 API モード：auto / responses / chat-completions。`auto` は OpenAI 公式エンドポイントでは Responses、`--openai-base-url` 設定時は Chat Completions を使用します。`/v1/responses` を実装するカスタムエンドポイントでは `responses` を明示指定してください。 |
