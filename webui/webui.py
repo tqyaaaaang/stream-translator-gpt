@@ -25,6 +25,11 @@ from webui.process_utils import build_utf8_subprocess_env, popen_utf8, run_utf8
 logger = logging.getLogger('main')
 configure_logging(verbosity_from_argv(sys.argv[1:]))
 
+WEBUI_DEPRECATION_MESSAGE = (
+    "The WebUI has been deprecated and unsupported since 2026-10-26. "
+    "Use the command-line interface for supported features."
+)
+
 
 class I18n:
 
@@ -828,6 +833,7 @@ def run_list_formats(url, cookies, input_proxy):
 with gr.Blocks() as demo:
     gr.Markdown(
         f"<h1>Stream Translator GPT WebUI <small style='font-weight: normal; color: gray;'>{__version__}</small></h1>")
+    gr.Markdown(f"**{WEBUI_DEPRECATION_MESSAGE}**")
 
     with gr.Tabs():
         with gr.Tab(i18n.get("input")):
@@ -1461,6 +1467,7 @@ def main():
 
         configure_logging(args.verbose)
 
+        logger.warning(WEBUI_DEPRECATION_MESSAGE)
         logger.info("Starting Stream Translator GPT WebUI")
         demo.queue().launch(inbrowser=True, share=args.share)
     finally:

@@ -4,7 +4,7 @@
 
 [**English**](./README.md) | **中文** | [**日本語**](./README_JP.md)
 
-对直播流、本地媒体文件和设备音频进行实时转录和翻译。提供命令行工具和 Gradio WebUI 两种使用方式。
+对直播流、本地媒体文件和设备音频进行实时转录和翻译。请通过命令行工具使用受支持的功能。旧版 Gradio WebUI 已弃用，不再维护或提供支持。
 
 ## 在 Colab 上快速开始（推荐）
 
@@ -14,7 +14,7 @@
 - 使用 **OpenAI Transcription API** 转录或 **GPT API** 翻译：[创建 **OpenAI API key**](https://platform.openai.com/api-keys)（也可以使用任何 **OpenAI 兼容格式**的 API）
 - 使用 **Modulate Multilingual Transcription — Streaming** 需要准备 [**Modulate API key**](https://docs.modulate.ai/guides/authentication)。
 
-|                                                                                            命令行                                                                                             |                                                                                         WebUI                                                                                          |
+|                                                                                            命令行                                                                                             |                                                                                         WebUI (deprecated)                                                                             |
 | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
 | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ionic-bond/stream-translator-gpt/blob/main/colab/command_line_CN.ipynb) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ionic-bond/stream-translator-gpt/blob/main/colab/webui_CN.ipynb) |
 
@@ -96,7 +96,7 @@ flowchart LR
 pip install stream-translator-gpt -U
 ```
 
-或连同 WebUI 一起安装：
+如需同时安装不再受支持的旧版 WebUI：
 
 ```
 pip install stream-translator-gpt[webui] -U
@@ -106,13 +106,17 @@ pip install stream-translator-gpt[webui] -U
 
 ### WebUI
 
+> **自 2026-10-26 起弃用：** WebUI 不再维护或提供支持。保留原有入口和代码供已有用户使用，后续新功能仅支持命令行。
+
+<!-- WebUI 弃用记录：提交后补充弃用提交和弃用前基线的完整提交链接。 -->
+
 ```
 stream-translator-gpt-webui
 ```
 
 启动时可以通过 `--ui-language` 指定 WebUI 界面语言，可选值为 `en`、`zh` 或 `ja`。
 
-然后在浏览器中打开输出的本地链接。CLI 的全部功能都可以在界面中使用，配置还可以保存为预设。
+如需使用保留的旧版界面，在浏览器中打开输出的本地链接。现有配置仍可保存为预设，但不再维护与后续 CLI 变更的兼容性。
 
 ### 命令行
 

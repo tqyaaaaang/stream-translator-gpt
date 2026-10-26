@@ -1,6 +1,6 @@
 # stream-translator-gpt
 
-Real-time transcription and translation for live streams, local media files, and device audio. Available as a command-line tool and a Gradio WebUI.
+Real-time transcription and translation for live streams, local media files, and device audio. Use the command-line tool for supported features. The legacy Gradio WebUI is deprecated and unsupported.
 
 ## Quick Start on Colab (Recommended)
 
@@ -10,7 +10,7 @@ The easiest way to use this tool, no local environment to set up, and Colab's pe
 - [Create an **OpenAI API key**](https://platform.openai.com/api-keys) for **OpenAI Transcription API** transcription or **GPT API** translation (any **OpenAI-compatible API** can also be used)
 - A [**Modulate API key**](https://docs.modulate.ai/guides/authentication) is required to use **Modulate Multilingual Transcription — Streaming**.
 
-|                                                                                        Command Line                                                                                        |                                                                                        WebUI                                                                                        |
+|                                                                                        Command Line                                                                                        |                                                                                        WebUI (deprecated)                                                                           |
 | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
 | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ionic-bond/stream-translator-gpt/blob/main/colab/command_line.ipynb) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ionic-bond/stream-translator-gpt/blob/main/colab/webui.ipynb) |
 
@@ -35,7 +35,7 @@ Then install the package:
 pip install stream-translator-gpt -U
 ```
 
-Or with the WebUI included:
+To install the legacy, unsupported WebUI as well:
 
 ```
 pip install stream-translator-gpt[webui] -U
@@ -45,13 +45,17 @@ pip install stream-translator-gpt[webui] -U
 
 ### WebUI
 
+> **Deprecated since 2026-10-26:** the WebUI is no longer maintained or supported. Its entry point and code remain available for existing users, but new features are available through the command-line interface only.
+
+<!-- WebUI deprecation history: add the deprecation commit and preceding baseline links once committed. -->
+
 ```
 stream-translator-gpt-webui
 ```
 
 To select the WebUI interface language at startup, use `--ui-language` with `en`, `zh`, or `ja`.
 
-Then open the printed local URL in your browser. All CLI features are available through the interface, and your settings can be saved as presets.
+For the retained legacy interface, open the printed local URL in your browser. Existing settings can still be saved as presets; compatibility with future CLI changes is not maintained.
 
 ### Command line
 

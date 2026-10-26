@@ -4,7 +4,7 @@
 
 [**English**](./README.md) | [**中文**](./README_CN.md) | **日本語**
 
-ライブストリーム・ローカルメディアファイル・デバイス音声のリアルタイム文字起こしと翻訳。コマンドラインツールと Gradio WebUI の 2 つの形態で利用できます。
+ライブストリーム・ローカルメディアファイル・デバイス音声のリアルタイム文字起こしと翻訳。サポート対象の機能はコマンドラインツールから利用してください。従来の Gradio WebUI は非推奨となり、保守・サポートを終了しました。
 
 ## Colab でクイックスタート（推奨）
 
@@ -14,7 +14,7 @@
 - **OpenAI Transcription API** で文字起こし、または **GPT API** で翻訳する場合：[**OpenAI API** キーを作成](https://platform.openai.com/api-keys)（**OpenAI 互換の API** も利用できます）
 - **Modulate Multilingual Transcription — Streaming** を使うには [**Modulate API キー**](https://docs.modulate.ai/guides/authentication)が必要です。
 
-|                                                                                        コマンドライン                                                                                         |                                                                                         WebUI                                                                                          |
+|                                                                                        コマンドライン                                                                                         |                                                                                         WebUI (deprecated)                                                                             |
 | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
 | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ionic-bond/stream-translator-gpt/blob/main/colab/command_line_JP.ipynb) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ionic-bond/stream-translator-gpt/blob/main/colab/webui_JP.ipynb) |
 
@@ -96,7 +96,7 @@ flowchart LR
 pip install stream-translator-gpt -U
 ```
 
-WebUI も含める場合：
+サポートが終了した従来の WebUI もインストールする場合：
 
 ```
 pip install stream-translator-gpt[webui] -U
@@ -106,13 +106,17 @@ pip install stream-translator-gpt[webui] -U
 
 ### WebUI
 
+> **2026-10-26 より非推奨：** WebUI の保守・サポートを終了しました。既存ユーザー向けに起動コマンドとコードは残しますが、今後の新機能はコマンドラインのみをサポートします。
+
+<!-- WebUI 廃止履歴：コミット後に、非推奨化コミットと直前の基準コミットへの完全なリンクを追加する。 -->
+
 ```
 stream-translator-gpt-webui
 ```
 
 起動時に `--ui-language` を使って WebUI の表示言語を `en`、`zh`、`ja` から指定できます。
 
-表示されたローカル URL をブラウザで開いてください。CLI の全機能を画面上で利用でき、設定はプリセットとして保存できます。
+従来の画面を利用する場合は、表示されたローカル URL をブラウザで開いてください。既存の設定は引き続きプリセットに保存できますが、今後の CLI 変更との互換性は保守しません。
 
 ### コマンドライン
 
