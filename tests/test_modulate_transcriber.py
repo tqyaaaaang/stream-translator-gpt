@@ -1422,18 +1422,18 @@ class ModulateConfigTest(unittest.TestCase):
         default = tyro.cli(Config, args=['input'])
         enabled = tyro.cli(Config, args=[
             'input', '--use-modulate-transcription-api', '--modulate-api-key', 'mod-key',
-            '--modulate-partial-cutoff-seconds', '7.5', '--modulate-reconnect-attempts', '5',
-            '--modulate-reconnect-backoff-seconds', '0.25', '--modulate-websocket-compression',
+            '--modulate-partial-cutoff-seconds', '7.5', '--transcribe-reconnect-attempts', '5',
+            '--transcribe-reconnect-backoff-seconds', '0.25', '--modulate-websocket-compression',
         ])
 
         self.assertFalse(default.use_modulate_transcription_api)
-        self.assertEqual(default.modulate_reconnect_attempts, 3)
+        self.assertEqual(default.transcribe_reconnect_attempts, 3)
         self.assertFalse(default.modulate_websocket_compression)
         self.assertTrue(enabled.use_modulate_transcription_api)
         self.assertEqual(enabled.modulate_api_key, 'mod-key')
         self.assertEqual(enabled.modulate_partial_cutoff_seconds, 7.5)
-        self.assertEqual(enabled.modulate_reconnect_attempts, 5)
-        self.assertEqual(enabled.modulate_reconnect_backoff_seconds, 0.25)
+        self.assertEqual(enabled.transcribe_reconnect_attempts, 5)
+        self.assertEqual(enabled.transcribe_reconnect_backoff_seconds, 0.25)
         self.assertTrue(enabled.modulate_websocket_compression)
 
     def test_validation_requires_key_and_valid_retry_values(self):
@@ -1442,9 +1442,9 @@ class ModulateConfigTest(unittest.TestCase):
             Config(url='input', use_modulate_transcription_api=True, modulate_api_key='key',
                    modulate_partial_cutoff_seconds=0),
             Config(url='input', use_modulate_transcription_api=True, modulate_api_key='key',
-                   modulate_reconnect_attempts=-1),
+                   transcribe_reconnect_attempts=-1),
             Config(url='input', use_modulate_transcription_api=True, modulate_api_key='key',
-                   modulate_reconnect_backoff_seconds=float('nan')),
+                   transcribe_reconnect_backoff_seconds=float('nan')),
         ]
         for config in invalid_configs:
             with self.subTest(config=config), self.assertRaises(SystemExit):

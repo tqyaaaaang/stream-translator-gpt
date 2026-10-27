@@ -222,11 +222,15 @@ class Config:
     """After a Modulate partial utterance has remained open for longer than this many seconds, force a new output
     segment at the next newly observed full-width or half-width punctuation mark."""
 
-    modulate_reconnect_attempts: int = 3
-    """Number of automatic reconnection attempts after an unexpected Modulate WebSocket interruption."""
+    transcribe_reconnect_attempts: Annotated[int, tyro.conf.arg(aliases=('--modulate-reconnect-attempts',))] = 3
+    """Maximum automatic reconnect attempts for Modulate and ElevenLabs Scribe. Zero disables retries.
+    --modulate-reconnect-attempts is a deprecated alias."""
 
-    modulate_reconnect_backoff_seconds: float = 1.0
-    """Initial delay before reconnecting to Modulate. Repeated failures use exponential backoff up to 30 seconds."""
+    transcribe_reconnect_backoff_seconds: Annotated[
+        float, tyro.conf.arg(aliases=('--modulate-reconnect-backoff-seconds',))] = 1.0
+    """Initial reconnect delay for Modulate and ElevenLabs Scribe. Must be finite and non-negative; zero skips the
+    delay. Repeated failures use exponential backoff up to 30 seconds.
+    --modulate-reconnect-backoff-seconds is a deprecated alias."""
 
     modulate_websocket_compression: bool = False
     """Enable per-message deflate compression for the Modulate WebSocket. Disabled by default."""
@@ -587,6 +591,8 @@ def run(config: Config):
                 logger.debug('Selected ElevenLabs Scribe v2 realtime transcription backend')
                 return ElevenLabsScribeTranscriber(
                     api_key=config.elevenlabs_api_key,
+                    reconnect_attempts=config.transcribe_reconnect_attempts,
+                    reconnect_backoff_seconds=config.transcribe_reconnect_backoff_seconds,
                     language=config.language,
                     proxy=config.processing_proxy,
                     verify_ssl=config.verify_ssl,
@@ -606,8 +612,8 @@ def run(config: Config):
                 return ModulateStreamingTranscriber(
                     api_key=config.modulate_api_key,
                     partial_cutoff_seconds=config.modulate_partial_cutoff_seconds,
-                    reconnect_attempts=config.modulate_reconnect_attempts,
-                    reconnect_backoff_seconds=config.modulate_reconnect_backoff_seconds,
+                    reconnect_attempts=config.transcribe_reconnect_attempts,
+                    reconnect_backoff_seconds=config.transcribe_reconnect_backoff_seconds,
                     proxy=config.processing_proxy,
                     verify_ssl=config.verify_ssl,
                     websocket_compression=config.modulate_websocket_compression,
@@ -835,10 +841,24 @@ def _preprocess_deprecated_flags(argv):
     processed = []
     args = normalize_verbosity_args(argv)
     legacy_language_filters = _legacy_language_filters_from_argv(args)
+    reconnect_aliases = {
+        '--modulate-reconnect-attempts': '--transcribe-reconnect-attempts',
+        '--modulate-reconnect-backoff-seconds': '--transcribe-reconnect-backoff-seconds',
+    }
+    positional_only = False
     index = 0
     while index < len(args):
         arg = args[index]
         normalized_arg = arg.replace('_', '-')
+        if arg == '--':
+            positional_only = True
+        option, separator, value = arg.partition('=')
+        replacement = reconnect_aliases.get(option.replace('_', '-'))
+        if replacement and not positional_only:
+            logger.warning('%s is deprecated. Please use %s instead.', option, replacement)
+            processed.append(replacement + separator + value)
+            index += 1
+            continue
         if normalized_arg == '--wait-for-video':
             processed.append('--wait-for-video')
             if index + 1 < len(args):
@@ -1071,16 +1091,18 @@ def _validate_and_normalize(config: Config):
                 or config.modulate_partial_cutoff_seconds <= 0):
             logger.error('Modulate partial cutoff seconds must be a finite value greater than zero')
             sys.exit(1)
-        if config.modulate_reconnect_attempts < 0:
-            logger.error('Modulate reconnect attempts must be zero or greater')
-            sys.exit(1)
-        if (not math.isfinite(config.modulate_reconnect_backoff_seconds)
-                or config.modulate_reconnect_backoff_seconds < 0):
-            logger.error('Modulate reconnect backoff seconds must be a finite value of zero or greater')
-            sys.exit(1)
         if config.url.lower() != 'device' and not is_url(config.url) and config.pacer != 'realtime':
             logger.warning('Modulate local-file transcription works best with --pacer realtime so partial '
                            'cutoff timing follows the media timeline')
+
+    if config.use_modulate_transcription_api or config.use_elevenlabs_scribe_api:
+        if config.transcribe_reconnect_attempts < 0:
+            logger.error('--transcribe-reconnect-attempts must be zero or greater')
+            sys.exit(1)
+        if (not math.isfinite(config.transcribe_reconnect_backoff_seconds)
+                or config.transcribe_reconnect_backoff_seconds < 0):
+            logger.error('--transcribe-reconnect-backoff-seconds must be a finite value of zero or greater')
+            sys.exit(1)
 
     if config.translation_prompt and not (config.openai_api_key or config.google_api_key):
         logger.error('Please fill in the OpenAI / Google API key when enabling LLM translation')

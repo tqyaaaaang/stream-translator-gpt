@@ -174,6 +174,8 @@ Scribe は接続内のコンテキストを保持し、manual commit でその�
 stream-translator-gpt recording.mp3 --use-elevenlabs-scribe-api --elevenlabs-api-key "$ELEVENLABS_API_KEY" --language ja --pacer realtime
 ```
 
+Modulate と Scribe は `--transcribe-reconnect-attempts`（デフォルト `3`）と `--transcribe-reconnect-backoff-seconds`（デフォルト `1.0`）を共有します。試行回数は 0 以上の整数で、`0` は自動再接続を無効にします。バックオフ秒数は有限の 0 以上の値で、`0` は待機なしで再試行します。それ以外は最大 30 秒の指数バックオフを使います。旧名 `--modulate-reconnect-attempts` と `--modulate-reconnect-backoff-seconds` は非推奨の別名として引き続き使えますが、警告を出力します。`--flag value` と `--flag=value` の両形式に対応し、新旧名を混在させた場合は各設定の最後の指定が優先されます。各バックエンドの再試行対象と音声のリプレイ動作は従来どおりです。
+
 **翻訳**（`--translation-prompt` を設定すると有効になり、記入した API キーに応じてプロバイダが選ばれます）：
 
 - **Gemini** で翻訳: ```stream-translator-gpt {URL} --language {入力言語} --translation-prompt "{入力言語}から{出力言語}に翻訳" --google-api-key {Google キー}```
@@ -275,8 +277,10 @@ context モードは逐次処理、それ以外は最大 10 リクエストで�
 | `--use-modulate-transcription-api` |                                | Modulate Multilingual Transcription — Streaming を使用し、16 kHz 音声を直接ストリーミングして Silero VAD をバイパスします。                                                                                               |
 | `--use-elevenlabs-scribe-api` | | ElevenLabs Scribe v2 Realtime を使用し、ローカル VAD による manual commit とタイムスタンプを有効にします。CLI のみ。 |
 | `--modulate-partial-cutoff-seconds` | 10.0                           | 現在の未確定文の最初の文字からこの秒数を超えると、その後の最初の全角または半角の句読点で確定します。それ以前の無音時間は含まれません。                                                                      |
-| `--modulate-reconnect-attempts`    | 3                              | Modulate の予期しない通信切断後に行う再接続の最大試行回数です。明示的な認証、クォータ、および API エラーは再試行しません。                                                                                                 |
-| `--modulate-reconnect-backoff-seconds` | 1.0                        | 最初の再接続までの待機秒数です。以降は指数バックオフを使用し、再接続後は直近の final 結果以降の音声を最大 10 分間リプレイします。                                                                                           |
+| `--transcribe-reconnect-attempts` | 3 | Modulate と Scribe の自動再接続の最大試行回数。0 以上の整数で、`0` は自動再接続を無効にします。 |
+| `--transcribe-reconnect-backoff-seconds` | 1.0 | Modulate と Scribe の最初の再接続待機秒数。有限の 0 以上の値で、`0` は待機なし。指数バックオフは最大 30 秒です。 |
+| `--modulate-reconnect-attempts` | | `--transcribe-reconnect-attempts` の非推奨の別名。使用時に警告を出力し、両方のストリーミングバックエンドに適用されます。 |
+| `--modulate-reconnect-backoff-seconds` | | `--transcribe-reconnect-backoff-seconds` の非推奨の別名。使用時に警告を出力し、両方のストリーミングバックエンドに適用されます。 |
 | `--modulate-websocket-compression` | False                          | Modulate の WebSocket per-message deflate を有効にします。圧縮はネットワーク帯域を削減できますが CPU 負荷が増えます。デフォルトは非圧縮で、CPU リソースが限られネットワーク条件が良い環境を優先します。                        |
 | `--openai-transcription-model`     | gpt-transcribe                 | OpenAI 文字起こしモデル。通常の文字起こしには `gpt-transcribe` を推奨。`whisper-1`、`gpt-4o-mini-transcribe`、`gpt-4o-transcribe` も使用できます。                                                                         |
 | `--use-hf-asr`                     |                                | HuggingFace ASR モデルを使用。`--model` でモデル ID を指定。`pip install stream-translator-gpt[hf_asr]` が必要。                                                                                                           |

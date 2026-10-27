@@ -172,6 +172,8 @@ Scribe 在同一连接内自行保留上下文，manual commit 不会清空会�
 stream-translator-gpt recording.mp3 --use-elevenlabs-scribe-api --elevenlabs-api-key "$ELEVENLABS_API_KEY" --language ja --pacer realtime
 ```
 
+Modulate 和 Scribe 共用 `--transcribe-reconnect-attempts`（默认 `3`）与 `--transcribe-reconnect-backoff-seconds`（默认 `1.0`）。重连次数必须是非负整数，`0` 表示关闭自动重连；退避秒数必须是有限非负数，`0` 表示不延迟重试，其他值采用最高 30 秒的指数退避。旧参数 `--modulate-reconnect-attempts` 和 `--modulate-reconnect-backoff-seconds` 保留为已弃用别名，使用时会输出 warning。支持 `--flag value` 和 `--flag=value` 两种写法；混用新旧名称时，每项设置以最后出现的值为准。各后端原有的可重试错误范围和音频重放行为保持不变。
+
 **翻译**（设置 `--translation-prompt` 即启用；根据填写的 API key 自动选择服务商）：
 
 - 使用 **Gemini**: ```stream-translator-gpt {网址} --language {输入语言} --translation-prompt "把{输入语言}翻译成{输出语言}" --google-api-key {你的 Google key}```
@@ -273,8 +275,10 @@ context 模式串行，否则最多 10 个并发请求。`--translation-threads`
 | `--use-modulate-transcription-api` |                                | 使用 Modulate Multilingual Transcription — Streaming，直接流式处理 16 kHz 音频并绕过 Silero VAD。                                                                            |
 | `--use-elevenlabs-scribe-api` | | 使用 ElevenLabs Scribe v2 Realtime，由本地 VAD 手动 commit，并开启时间戳。仅支持命令行。 |
 | `--modulate-partial-cutoff-seconds` | 10.0                           | 从当前未提交句子的第一个字开始超过该秒数后，在随后出现的第一个全角或半角标点处提交；此前的静音不计入等待时间。                                                                        |
-| `--modulate-reconnect-attempts`    | 3                              | Modulate 意外传输中断后的最大重连次数；显式认证、额度和 API 错误不会重试。                                                                                                    |
-| `--modulate-reconnect-backoff-seconds` | 1.0                        | 首次重连等待秒数；后续重试采用指数退避。重连成功后会重放上一个 final 结果之后收到的、最多 10 分钟音频。                                                                       |
+| `--transcribe-reconnect-attempts` | 3 | Modulate 和 Scribe 的最大自动重连次数。必须是非负整数；`0` 关闭自动重连。 |
+| `--transcribe-reconnect-backoff-seconds` | 1.0 | Modulate 和 Scribe 的首次重连等待秒数。必须是有限非负数；`0` 表示不延迟。指数退避最高 30 秒。 |
+| `--modulate-reconnect-attempts` | | `--transcribe-reconnect-attempts` 的已弃用别名；使用时输出 warning，适用于两个流式后端。 |
+| `--modulate-reconnect-backoff-seconds` | | `--transcribe-reconnect-backoff-seconds` 的已弃用别名；使用时输出 warning，适用于两个流式后端。 |
 | `--modulate-websocket-compression` | False                          | 为 Modulate 启用 WebSocket per-message deflate。压缩可减少网络带宽，但会增加 CPU 开销；默认不压缩，更适合 CPU 资源紧张而网络条件较好的部署。                                  |
 | `--openai-transcription-model`     | gpt-transcribe                 | OpenAI 转录模型。普通转录推荐使用 `gpt-transcribe`；也支持 `whisper-1`、`gpt-4o-mini-transcribe` 和 `gpt-4o-transcribe`。                                                     |
 | `--use-hf-asr`                     |                                | 使用 HuggingFace ASR 模型，用 `--model` 指定模型 ID。需要 `pip install stream-translator-gpt[hf_asr]`。                                                                       |
