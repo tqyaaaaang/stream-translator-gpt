@@ -27,6 +27,7 @@ from ..utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME, TranslationTask, sec2
 
 logger = logging.getLogger('main')
 SCRIBE_ENDPOINT = 'wss://api.elevenlabs.io/v1/speech-to-text/realtime'
+SCRIBE_STREAM_MAX_SEND_RATE = 5.0
 CHUNK_SAMPLES = SAMPLES_PER_FRAME * 4
 # The service reports this lower bound in commit_throttled responses. Allow a
 # small margin for its audio-duration rounding. This isn't a network chunk size.
@@ -109,7 +110,7 @@ class _Commit:
 
 
 class ElevenLabsScribeTranscriber(AudioTranscriber):
-    def __init__(self, api_key, proxy=None, verify_ssl=True, max_audio_send_rate=5.0,
+    def __init__(self, api_key, proxy=None, verify_ssl=True, max_audio_send_rate: float | None = None,
                  min_audio_length=0.5, max_audio_length=30.0, target_audio_length=5.0,
                  continuous_no_speech_threshold=1.0, dynamic_no_speech_threshold=True,
                  prefix_retention_length=0.5, vad_threshold=0.35, dynamic_vad_threshold=True,
@@ -121,8 +122,10 @@ class ElevenLabsScribeTranscriber(AudioTranscriber):
         self.api_key = (api_key or '').strip()
         if not self.api_key:
             raise ValueError('ElevenLabs API key is required')
-        for name, value in (('maximum audio send rate', max_audio_send_rate),
-                            ('final timeout', final_timeout), ('idle timeout', idle_timeout)):
+        if (max_audio_send_rate is not None
+                and (not math.isfinite(max_audio_send_rate) or max_audio_send_rate <= 0)):
+            raise ValueError('ElevenLabs maximum audio send rate must be finite and greater than zero')
+        for name, value in (('final timeout', final_timeout), ('idle timeout', idle_timeout)):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f'ElevenLabs {name} must be finite and greater than zero')
         if reconnect_attempts < 0 or not math.isfinite(reconnect_backoff_seconds) or reconnect_backoff_seconds < 0:
@@ -158,7 +161,8 @@ class ElevenLabsScribeTranscriber(AudioTranscriber):
         self._boundary_requested = False
         self._task_count = 0
         self._last_task_end = 0.0
-        self._pacer = _SendPacer(max_audio_send_rate, self._stop_event, self.clock)
+        self._pacer = (_SendPacer(max_audio_send_rate, self._stop_event, self.clock)
+                       if max_audio_send_rate is not None else None)
         if prefix_retention_length:
             logger.info('ElevenLabs sends continuous audio; --prefix-retention-length does not replay audio')
         if self.use_history_context:
@@ -345,12 +349,15 @@ class ElevenLabsScribeTranscriber(AudioTranscriber):
         return None
 
     def _send(self, websocket, pcm, commit):
-        if not self._pacer.wait():
+        if self._stop_event.is_set():
+            return False
+        if self._pacer is not None and not self._pacer.wait():
             return False
         websocket.send(json.dumps(dict(message_type='input_audio_chunk',
                                        audio_base_64=base64.b64encode(pcm).decode('ascii'),
                                        sample_rate=SAMPLE_RATE, commit=commit)))
-        self._pacer.record(len(pcm) // 2)
+        if self._pacer is not None:
+            self._pacer.record(len(pcm) // 2)
         return True
 
     def _emit_commit(self, pending, connection_start, output_queue):

@@ -215,12 +215,63 @@ class ElevenLabsConnectionOptionsTest(unittest.TestCase):
 
     def test_pacer_and_timeout_settings_reject_nonpositive_or_nonfinite_values(self):
         for option in ('max_audio_send_rate', 'final_timeout', 'idle_timeout'):
-            for value in (0, -1, math.nan, math.inf):
+            for value in (0, -1, math.nan, math.inf, -math.inf):
                 with self.subTest(option=option, value=value), self.assertRaises(ValueError):
                     _transcriber(**{option: value})
 
+    def test_send_rate_is_optional_and_unlimited_by_default(self):
+        for options in ({}, {'max_audio_send_rate': None}):
+            with self.subTest(options=options):
+                transcriber = _transcriber(**options)
+                self.assertIsNone(transcriber.max_audio_send_rate)
+                self.assertIsNone(transcriber._pacer)
+
+    def test_finite_positive_send_rates_enable_the_pacer(self):
+        for rate in (0.125, 1.0, 5.0):
+            with self.subTest(rate=rate):
+                transcriber = _transcriber(max_audio_send_rate=rate)
+                self.assertEqual(transcriber.max_audio_send_rate, rate)
+                self.assertIsInstance(transcriber._pacer, _SendPacer)
+
 
 class ElevenLabsSendPacerTest(unittest.TestCase):
+
+    def test_unlimited_send_does_not_delay_replayed_or_new_audio(self):
+        clock = _FakeClock()
+        transcriber = _transcriber(max_audio_send_rate=None, clock=clock)
+        sent_at = []
+        websocket = mock.Mock()
+        websocket.send.side_effect = lambda message: sent_at.append(clock())
+        repeated_audio = bytes(SAMPLE_RATE * 2)
+
+        with mock.patch.object(transcriber._stop_event, 'wait',
+                               side_effect=AssertionError('unlimited sends must not wait')) as wait:
+            for pcm in (repeated_audio, repeated_audio, b'\x01\x00' * SAMPLE_RATE):
+                self.assertTrue(transcriber._send(websocket, pcm, False))
+
+        self.assertEqual(sent_at, [100.0, 100.0, 100.0])
+        self.assertEqual(websocket.send.call_count, 3)
+        self.assertIsNone(transcriber._pacer)
+        wait.assert_not_called()
+
+    def test_unlimited_send_respects_stop_before_audio_or_empty_commit(self):
+        transcriber = _transcriber(max_audio_send_rate=None)
+        transcriber.stop()
+        websocket = mock.Mock()
+
+        for pcm, commit in ((bytes(SAMPLE_RATE * 2), False), (b'', True)):
+            with self.subTest(commit=commit):
+                self.assertFalse(transcriber._send(websocket, pcm, commit))
+        websocket.send.assert_not_called()
+
+    def test_stop_during_unlimited_send_prevents_the_following_send(self):
+        transcriber = _transcriber(max_audio_send_rate=None)
+        websocket = mock.Mock()
+        websocket.send.side_effect = lambda message: transcriber.stop()
+
+        self.assertTrue(transcriber._send(websocket, bytes(SAMPLE_RATE * 2), False))
+        self.assertFalse(transcriber._send(websocket, bytes(SAMPLE_RATE * 2), False))
+        websocket.send.assert_called_once()
 
     def test_first_send_is_immediate_and_following_sends_follow_one_or_five_x_rate(self):
         for rate in (1.0, 5.0):

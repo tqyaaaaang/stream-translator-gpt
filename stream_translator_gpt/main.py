@@ -25,7 +25,7 @@ from .getter.time_range import normalize_time_range, normalize_time_range_strict
 from .transcriber.audio_transcriber import OpenaiWhisper, FasterWhisper, SimulStreaming, RemoteOpenaiTranscriber, HFTranscriber
 from .transcriber.modulate_transcriber import (MODULATE_INPUT_QUEUE_SECONDS, MODULATE_STREAM_MAX_SEND_RATE,
                                    ModulateStreamingTranscriber)
-from .transcriber.elevenlabs_transcriber import ElevenLabsScribeTranscriber
+from .transcriber.elevenlabs_transcriber import SCRIBE_STREAM_MAX_SEND_RATE, ElevenLabsScribeTranscriber
 from .exporter.result_exporter import ResultExporter
 from .utils.logging_utils import configure_logging, normalize_verbosity_args, shutdown_logging, verbosity_from_argv
 from . import __version__
@@ -131,8 +131,9 @@ class Config:
     pacer: Literal['unlimited', 'realtime'] = 'unlimited'
     """Control decoded audio pacing for URL streams and local files. Unlimited mode reads as fast as downstream
     capacity permits; realtime emits one second of decoded audio per second of wall-clock time. Device input ignores this
-    option and logs a warning because capture is already paced by the audio device. ElevenLabs Scribe additionally caps
-    API sending (including replay) at 1x in realtime mode and 5x otherwise."""
+    option and logs a warning because capture is already paced by the audio device. API sending and reconnect replay
+    are independent of input pacing: URL streams are capped at 1.5x for Modulate and 5x for ElevenLabs Scribe;
+    local files and devices have no additional API send limit."""
 
     device_index: int | None = None
     """The index of the device that needs to be recorded. If not set, the system default recording device will be
@@ -596,7 +597,7 @@ def run(config: Config):
                     language=config.language,
                     proxy=config.processing_proxy,
                     verify_ssl=config.verify_ssl,
-                    max_audio_send_rate=1.0 if config.pacer == 'realtime' else 5.0,
+                    max_audio_send_rate=(SCRIBE_STREAM_MAX_SEND_RATE if is_url(config.url) else None),
                     min_audio_length=config.min_audio_length,
                     max_audio_length=config.max_audio_length,
                     target_audio_length=config.target_audio_length,

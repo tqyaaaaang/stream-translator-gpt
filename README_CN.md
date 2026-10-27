@@ -162,7 +162,7 @@ stream-translator-gpt {文件路径} --pacer realtime --use-modulate-transcripti
 
 若 commit 区间不足 0.32 秒，会延后边界并继续接收音频，为服务端 0.3 秒的最小提交时长留出余量。EOF 时若尾段不足此长度，仅补充必要的静音；补充部分不计入源音频时长或字幕时间范围。该下限针对 commit 区间，不针对单个网络音频块。
 
-`--pacer realtime` 将 Scribe 的全部发送（包括断线重放）限制为 1 倍音频速度；其他情况下最高按 5 倍速发送以追赶进度，模型的实际处理速度可能变化。只有 committed 转录会进入现有过滤、翻译和输出流程，partial 不会作为最终结果输出。有逐词时间戳时会使用它们；API 可能返回 `words: null`，因此并非每段都有逐词对齐。
+`--pacer` 只控制 URL 和本地文件的输入速率。对于 URL 音源，Scribe 的 API 发送和断线重放另设 5 倍音频速度上限，与 `realtime` 或 `unlimited` 无关；没有积压时通常跟随音源速率。本地文件和设备不额外限制 Scribe API 发送速度：正常按输入供给发送，积压音频和断线重放则尽快发送。模型的实际处理速度可能变化。只有 committed 转录会进入现有过滤、翻译和输出流程，partial 不会作为最终结果输出。有逐词时间戳时会使用它们；API 可能返回 `words: null`，因此并非每段都有逐词对齐。
 
 Scribe 在同一连接内自行保留上下文，manual commit 不会清空会话上下文。`--transcription-context` 对此后端不额外注入 `previous_text`，也不能关闭模型自身的会话上下文。
 
@@ -247,7 +247,7 @@ context 模式串行，否则最多 10 个并发请求。`--translation-threads`
 | `--to TIME`                       | 默认关闭                       | 原音视频中的绝对结束位置，不是时长；必须大于 `--ss`（未设置时为零）。设备输入或 `--live-from-start` 下警告并忽略。 |
 | `--time-range-strict`             | 默认关闭                       | HLS/TS 从头解码再可靠裁剪，代替可能有分片级偏差的快速 seek；需要读取前面的音频。未指定 `--ss` / `--to`、设备输入或 `--live-from-start` 下警告并忽略。 |
 | `--stream-format-diagnostic-file PATH` | 默认关闭                  | 让 yt-dlp 将所选流格式的白名单元数据写入用户指定路径，并在每条流开始时替换该文件。仅显式传入时启用；未指定时绝不会创建隐式诊断文件。                                      |
-| `--pacer`                          | unlimited                      | URL 流和本地文件的输入速率限制：`unlimited` 按下游处理能力尽快读取，`realtime` 按墙钟时间每秒输出一秒解码音频。设备输入本身已是实时采集，指定非默认值时会警告并忽略。 Scribe 的发送和重放在 `realtime` 下限速 1 倍，其他情况下最高 5 倍。 |
+| `--pacer`                          | unlimited                      | URL 流和本地文件的输入速率限制：`unlimited` 按下游处理能力尽快读取，`realtime` 按墙钟时间每秒输出一秒解码音频。设备输入本身已是实时采集，指定非默认值时会警告并忽略。 仅 URL 音源的 Scribe API 发送和断线重放另设 5 倍速度上限，与此设置无关。本地文件和设备的 Scribe 发送（包括重放）不额外限速。 |
 | `--device-index`                   |                                | 需要录制的设备编号。不设置时使用系统默认录音设备。                                                                                                                            |
 | `--list-devices`                   |                                | 打印所有音频设备信息后退出。                                                                                                                                                  |
 | `--device-recording-interval`      | 0.5                            | 录制间隔越短延迟越低，但会增加 CPU 占用。建议设置在 0.1 到 1.0 之间。                                                                                                         |

@@ -10,6 +10,7 @@ import tyro
 
 from stream_translator_gpt import main
 from stream_translator_gpt.main import Config, _create_audio_getter, _validate_and_normalize
+from stream_translator_gpt.transcriber.elevenlabs_transcriber import SCRIBE_STREAM_MAX_SEND_RATE
 from stream_translator_gpt.transcriber.modulate_transcriber import MODULATE_STREAM_MAX_SEND_RATE
 from stream_translator_gpt.utils.common import SAMPLE_RATE, SAMPLES_PER_FRAME
 
@@ -92,6 +93,36 @@ class ElevenLabsConfigTest(unittest.TestCase):
                 _create_audio_getter(config)
             self.assertNotIn('preserve_final_block', getter.call_args.kwargs)
 
+    def test_scribe_getter_pacing_remains_controlled_by_pacer_option(self):
+        for url, constructor in (('clip.mp3', 'LocalFileAudioGetter'),
+                                 ('https://example.test/stream', 'StreamAudioGetter')):
+            for pacer in ('unlimited', 'realtime'):
+                config = Config(url=url, pacer=pacer, use_elevenlabs_scribe_api=True)
+                with self.subTest(url=url, pacer=pacer), mock.patch.object(main, constructor) as getter:
+                    _create_audio_getter(config)
+                    self.assertEqual(getter.call_args.kwargs['realtime'], pacer == 'realtime')
+                    self.assertTrue(getter.call_args.kwargs['preserve_final_block'])
+
+    def test_scribe_device_getters_keep_natural_capture_pacing(self):
+        for backend, constructor in (('pyaudio', 'DeviceAudioGetter'),
+                                     ('sounddevice', 'SoundDeviceAudioGetter')):
+            calls = []
+            for pacer in ('unlimited', 'realtime'):
+                config = Config(url='device', pacer=pacer, device_audio_getter=backend,
+                                use_elevenlabs_scribe_api=True)
+                with self.subTest(backend=backend, pacer=pacer), \
+                        mock.patch.object(main, constructor) as getter, \
+                        mock.patch.object(main.logger, 'warning') as warning:
+                    _create_audio_getter(config)
+                    calls.append(getter.call_args)
+                    self.assertNotIn('realtime', getter.call_args.kwargs)
+                    if pacer == 'realtime':
+                        warning.assert_called_once()
+                        self.assertIn('already real-time', warning.call_args.args[0])
+                    else:
+                        warning.assert_not_called()
+            self.assertEqual(calls[0], calls[1])
+
 
 class ElevenLabsPipelineRoutingTest(unittest.TestCase):
 
@@ -121,9 +152,10 @@ class ElevenLabsPipelineRoutingTest(unittest.TestCase):
             main.run(config)
         return constructors, workers, slicer_constructor
 
-    def test_scribe_uses_bounded_raw_queue_and_its_own_pacer_for_every_input(self):
-        for url in ('clip.mp3', 'https://example.test/stream', 'device'):
-            for pacer, expected_rate in (('unlimited', 5.0), ('realtime', 1.0)):
+    def test_scribe_uses_bounded_raw_queue_and_url_only_five_x_send_limit(self):
+        self.assertEqual(SCRIBE_STREAM_MAX_SEND_RATE, 5.0)
+        for url, expected_rate in (('clip.mp3', None), ('https://example.test/stream', 5.0), ('device', None)):
+            for pacer in ('unlimited', 'realtime'):
                 config = Config(url=url, pacer=pacer, use_elevenlabs_scribe_api=True,
                                 elevenlabs_api_key='scribe-test-key', language='ja',
                                 processing_proxy='http://proxy.test:8080', verify_ssl=False,
